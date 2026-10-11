@@ -57,6 +57,11 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          # Self-enable Pages with source "GitHub Actions" if it is not already
+          # enabled for this repository. Without this, the first run fails with
+          # "Get Pages site failed" until someone enables it in Settings.
+          enablement: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
