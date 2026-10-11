@@ -1,3 +1,10 @@
+this was fully vibecoded btw
+
+
+
+
+
+
 # Puter Playground
 
 **A free, unlimited AI playground that runs entirely in the browser — chat with any frontier model, or hand the task to an agent that writes files, runs code and ships the result to GitHub Pages.**
