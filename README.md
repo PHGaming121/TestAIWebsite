@@ -7,7 +7,7 @@ this was fully vibecoded btw
 
 # Puter Playground
 
-**A free, unlimited AI playground that runs entirely in the browser — chat with any frontier model, or hand the task to an agent that writes files, runs code and ships the result to GitHub Pages.**
+**A free AI playground that runs entirely in the browser — chat with any frontier model, or hand the task to an agent that writes files, runs code, generates images and video, remembers you between sessions, uses skills imported from Claude/ChatGPT/Gemini, and ships the result to GitHub Pages.**
 
 Live: **https://phgaming121.github.io/TestAIWebsite/**
 
@@ -34,16 +34,56 @@ The model list is **fetched live** from `puter.ai.listModels()` — 400+ models 
 - Optional cross-device history mirror into your own Puter KV
 
 ### Agent mode
-An autonomous loop with **25 tools**, native function calling *and* a fenced-JSON text protocol fallback (so models without tool support still work):
+An autonomous loop with **36 tools**, native function calling *and* a fenced-JSON text protocol fallback (so models without tool support still work):
 
 | Area | Tools |
 |---|---|
 | Files | `list_files` `read_file` `write_file` `edit_file` `delete_file` `make_directory` `rename_file` `search_files` |
 | Execution | `run_shell` (mini POSIX shell) · `run_javascript` (sandboxed Worker) · `run_python` (real CPython via Pyodide) |
+| Media | `generate_image` (incl. image-to-image editing) · `generate_video` (first/last frame, reference images, soundtrack) |
+| Memory | `remember` · `recall` · `forget` |
+| Skills | `list_skills` · `use_skill` · `create_skill` · `import_skill` |
+| Connections | `list_connections` · `call_connection` · `web_fetch` (reads any public page) |
 | GitHub | `github_status` `github_list_repos` `github_create_repo` `github_push` `github_list_files` `github_read_file` `github_create_branch` `github_open_pr` `github_create_issue` `github_enable_pages` |
-| Puter | `deploy_to_puter` (publish to `*.puter.site`) · `generate_image` · `ask_user` · `finish` |
+| Puter | `deploy_to_puter` (publish to `*.puter.site`) · `ask_user` · `finish` |
 
-Every write/execute/publish step goes through an **approval gate** you can allow once, allow always, or bypass entirely with *Auto-approve*. The loop is capped by a configurable step budget and can be stopped mid-run with `Esc`.
+Every write/execute/publish/network step goes through an **approval gate** you can allow once, allow always, or bypass entirely with *Auto-approve*. The loop is capped by a configurable step budget and can be stopped mid-run with `Esc`.
+
+### Images and video
+A **Create** tab (and the two agent tools) drives `puter.ai.txt2img` and `puter.ai.txt2vid`: model, provider, quality and size tiers, aspect ratio, negative prompt, seed and steps for images; clip length, output size, first/last frame, reference images, soundtrack and fps for video. Any image in the workspace can be used as an image-to-image reference or a video's first frame, so you can iterate.
+
+**"Free sample" is on by default.** Both drivers accept a test mode that returns a sample *without spending credits* — use it to check a prompt before paying for the real thing.
+
+Results are saved under `media/`, shown inline in the chat as media cards, previewable in the Files tab (images, video and audio), and downloadable. The bytes never go back into the model's context — only the path does — so a 10 MB clip costs you nothing in tokens.
+
+### Long-term memory
+A **Memory** tab holds durable facts about you: preferences, environment, projects, standing decisions. They are injected into the system prompt of *every* conversation (pinned ones always, the rest matched against what you just asked), so the agent stops re-asking questions it already knows the answer to.
+
+Retrieval is offline and instant — phrase hits, shared tokens, a light stemmer (*prefers* ↔ *preference*, *ships* ↔ *shipping*), tags, then pinned/recency as a tiebreaker. No embeddings, no model call, no credits spent on lookup. The agent has `remember` / `recall` / `forget`; `forget` refuses to guess when several memories match equally and asks for the exact id instead.
+
+**Distil from a conversation** asks a model to propose memories from the open chat. It is the only model call memory ever makes, it is never automatic, it is instructed not to record secrets, and nothing is stored until you tick individual candidates. Optionally mirror the whole store into **your own Puter KV** so it follows you across devices (merged by text, newest edit wins).
+
+### Connections: other providers and other apps
+The **Connect** tab has two independent halves.
+
+*Which AI answers* — Puter stays the default (no key, 400+ models), but any OpenAI-compatible endpoint can take over: **Ollama** or **LM Studio** on your own machine, **Pollinations** with no signup at all, plus OpenRouter, Groq, Gemini, Mistral, DeepSeek, NVIDIA NIM, Together, OpenAI, or a custom URL. One adapter covers them, and the model picker follows the switch.
+
+Two browser realities are handled explicitly:
+- **CORS.** When a direct fetch is refused, the call is retried through `puter.net.fetch`, which proxies without CORS. That proxy is XHR-backed and cannot stream, so the retry asks for a single completion instead of an SSE stream — the answer arrives whole rather than as unparseable fragments.
+- **localhost.** Puter's proxy runs on their servers and can never reach `127.0.0.1`, so local endpoints always go direct, and a failure names the fix (`OLLAMA_ORIGINS`, LM Studio's CORS switch).
+
+Keys live in your browser's localStorage and are sent only to their own endpoint.
+
+*Apps the agent can call* — a connection is a base URL plus an auth scheme (none, bearer, custom header, basic, or reuse your GitHub token). Keyless presets are one click: DuckDuckGo Instant Answers, Wikipedia REST, Hugging Face Hub, GitHub. `web_fetch` reads any public page through a dependency-free HTML reduction pass, so the playground can look things up instead of guessing. It refuses loopback addresses rather than letting a prompt wander into your LAN, and both network tools sit behind their own approval tier.
+
+### Skills
+The **Skills** tab speaks the [Agent Skills open standard](https://agentskills.io) — a folder with a `SKILL.md` (YAML frontmatter + Markdown instructions), published by Anthropic and now read by ChatGPT, Codex, Gemini CLI, VS Code, Copilot, Cursor and ~30 other agents. Import one and it works everywhere; write one here and other agents can read it.
+
+Import detects the format automatically: `SKILL.md`, a **ChatGPT custom-GPT** JSON export (instructions, greeting, knowledge files and API actions), a **Gemini Gem**, a `CLAUDE.md`/`AGENTS.md` rules file, an OpenAPI spec, plain Markdown, or a `.zip` with its `scripts/`, `references/` and `assets/` intact. You can also import from a URL. Skills are stored in the workspace under `skills/<name>/`, so they push to GitHub with everything else, and discovery also reads `.claude/skills`, `.agents/skills` and `.gemini/skills`.
+
+Progressive disclosure keeps the cost down: only each skill's name and description enter the prompt (~100 tokens each); `use_skill` loads the body when a task matches; bundled files are read on demand.
+
+**A skill is third-party instructions, so it is treated as untrusted by default.** `allowed-tools` is never honoured automatically — the row shows what the skill asks for, maps Claude's tool names onto this app's, and each grant is an explicit click you can revoke. Imported skills are badged *unreviewed* until you mark them reviewed, invalid skills are listed with their spec errors instead of silently loading, and the prompt states plainly that a skill cannot widen permissions, skip an approval, or override your request.
 
 ### Four interchangeable workspaces
 The agent works on whichever filesystem you pick — same API, same tools:
@@ -129,8 +169,14 @@ assets/vendor/             marked, DOMPurify, highlight.js, JSZip — bundled lo
 js/
   app.js                   bootstrap + wiring
   agent.js                 the agent loop, prompts, tool protocols, history compaction
-  tools.js                 25 tool definitions (schemas + handlers)
-  llm.js                   puter.ai.chat wrapper: streaming, tool accumulation, live model list
+  tools.js                 36 tool definitions (schemas + handlers)
+  llm.js                   puter.ai.chat wrapper: streaming, tool accumulation, live model list, error translation
+  providers.js             OpenAI-compatible adapter (Ollama, OpenRouter, Groq, Gemini, …) + CORS/loopback transport
+  connections.js           external apps the agent can call, and web_fetch's HTML reduction
+  media.js                 txt2img / txt2vid: option mapping, element→bytes, credit-free test mode
+  memory.js                long-term memory: ranking, prompt injection, Puter KV mirror, distillation
+  skills.js                Agent Skills: parse, validate, discover, import (ChatGPT/Gemini/Claude), prompt index
+  media-pane.js  memory-pane.js  connections-pane.js  skills-pane.js     the Create / Memory / Connect / Skills tabs
   workspace.js             one FS API over memory / OPFS / local folder / Puter cloud
   shell.js                 mini POSIX shell (pipes, &&, ||, ;, redirects, globs)
   exec.js                  JS Worker sandbox + Pyodide bridge
@@ -158,7 +204,7 @@ tests/                     dev-only headless suite (jsdom) — see tests/README.
 
 ## Testing
 
-**199 assertions** across three suites in [`tests/`](tests/), running the real app code under jsdom with a mocked `window.puter` and a mocked `api.github.com` — no network, no keys, no build step:
+**534 assertions** across three suites in [`tests/`](tests/), running the real app code under jsdom with a mocked `window.puter` and a mocked `api.github.com` — no network, no keys, no build step:
 
 ```bash
 cd tests && npm install && npm test
@@ -166,7 +212,7 @@ cd tests && npm install && npm test
 
 | Suite | Assertions | Covers |
 |-------|-----------|--------|
-| `unit.test.mjs` | 88 | workspace CRUD/tree/describe, shell semantics (`ls` `cd` `cat` `head` `tail` `wc` `grep`, pipes, redirects), all 25 tool handlers, both tool-call protocols, history compaction, markdown sanitising |
+| `unit.test.mjs` | 294 | workspace CRUD/tree/describe, shell semantics (`ls` `cd` `cat` `head` `tail` `wc` `grep`, pipes, redirects), tool handlers, both tool-call protocols, history compaction, markdown sanitising, friendly AI-error mapping, media option mapping and result normalisation, memory ranking/stemming/distillation/merge, provider config and OpenAI-compatible chat (streamed and not, including the CORS-proxy fallback), connection auth schemes, `web_fetch` guards and HTML extraction, SKILL.md parsing and spec validation, and every skill importer |
 | `ui.test.mjs` | 69 | boots the real `index.html`: model picker, streaming chat with reasoning, agent loop over several model calls, approval modal + remembered approvals, text-protocol fallback, mid-run downgrade when a model rejects native tools, files/terminal/github/publish panes, settings persistence, drag & drop, zero runtime errors |
 | `integration.test.mjs` | 42 | GitHub connect, repo select/auto-create, blob → tree → commit → ref, Pages enable, agent-driven `github_push`, PRs + issues, Puter cloud backend, `deploy_to_puter`, `generate_image` |
 
