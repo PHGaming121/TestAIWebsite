@@ -1,0 +1,19 @@
+{
+  "generatedAt": "2026-10-11T19:15:31Z",
+  "openclaw": "2026.10.1 (e178c39)",
+  "node": "v26.11.1",
+  "gatewayPort": 18789,
+  "summary": { "total": 10, "passed": 8, "failed": 0, "pending": 2 },
+  "checks": [
+    { "name": "Node runtime supported", "status": "PASS", "detail": "node v26.11.1 (requires >=24.16.0 or >=26.1.0)" },
+    { "name": "OpenClaw CLI installed", "status": "PASS", "detail": "2026.10.1 (e178c39)" },
+    { "name": "Config valid against schema", "status": "PASS", "detail": "valid:true, no warnings" },
+    { "name": "Model routing configured", "status": "PASS", "detail": "primary=openrouter/anthropic/claude-sonnet-4-6; fallbacks=3" },
+    { "name": "Token-reduction plugin enabled", "status": "PASS", "detail": "tokenjuice enabled" },
+    { "name": "Gateway responding", "status": "PASS", "detail": "GET http://127.0.0.1:18789/health -> {\"ok\":true,\"status\":\"live\"}" },
+    { "name": "Control UI served", "status": "PASS", "detail": "HTTP 200, text/html; charset=utf-8" },
+    { "name": "Gateway auth enforced", "status": "PASS", "detail": "mode=token; auth rate limiting configured" },
+    { "name": "Provider credential present", "status": "PENDING", "detail": "no provider key in env or auth store — set OPENROUTER_API_KEY" },
+    { "name": "End-to-end model reply", "status": "PENDING", "detail": "skipped — requires a provider credential (check 9)" }
+  ]
+}
