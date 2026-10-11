@@ -65,22 +65,23 @@ jobs:
           enablement: true
         continue-on-error: true
 
+      # Annotation lines must start at column 0, so they are echoed directly
+      # rather than embedded in an indented heredoc.
       - name: Explain Pages setup failure
         if: steps.pages.outcome == 'failure'
         run: |
-          cat <<'MSG'
-          ::error title=GitHub Pages needs a one-time setting change::This repository's Pages site is not set up for workflow deploys.
-
-          Fix it once, then re-run this workflow:
-
-            1. Open  Settings -> Pages  (link below)
-            2. Under "Build and deployment" -> "Source", choose  GitHub Actions
-            3. Re-run this workflow (Actions -> "Deploy site to GitHub Pages" -> Re-run all jobs)
-
-          If the site is currently set to "Deploy from a branch", switching the
-          source also stops the old branch-based build from overwriting this one.
-          MSG
+          echo "::error title=GitHub Pages needs a one-time setting change::This repository's Pages site is not set up for workflow deploys. Fix it once, then re-run this workflow."
           echo "::notice::Settings page: ${{ github.server_url }}/${{ github.repository }}/settings/pages"
+          printf '%s\n' \
+            '' \
+            'How to fix (one time, then re-run this workflow):' \
+            '' \
+            '  1. Open  Settings -> Pages' \
+            '  2. Under "Build and deployment" -> "Source", choose  GitHub Actions' \
+            '  3. Re-run this workflow: Actions -> "Deploy site to GitHub Pages" -> Re-run all jobs' \
+            '' \
+            'If the site is currently set to "Deploy from a branch", switching the source' \
+            'also stops the old branch-based build from overwriting this one.'
           exit 1
 
       - name: Upload artifact
