@@ -84,6 +84,19 @@ Notes: the File System Access API and OPFS need a secure context (`localhost` or
 ### Deploying your own copy
 Fork the repo → **Settings → Pages → Source: main branch, root** → done. All asset paths are relative, so it works at any sub-path.
 
+### Going live on `phgaming121.github.io` (two clicks, needs an admin)
+Automated deployment tools usually can't do these two steps — they need repo *administration* rights, which app/installation tokens are rarely granted. Both are quick:
+
+1. **Settings → General → Danger Zone → Change visibility → Public.**
+   GitHub Pages on a *private* repository requires a paid plan; making it public lets the free tier serve it.
+2. **Settings → Pages → Build and deployment → Source: “Deploy from a branch”**
+   → Branch: `main` (or `arena/c9ae3bd6-testaiwebsite` to preview the PR before merging) → Folder: `/ (root)` → **Save**.
+
+About a minute later the playground is live at **https://phgaming121.github.io/TestAIWebsite/**. No build, no environment variables, no keys — the repo root *is* the site.
+
+If you would rather not make the repo public, the app can publish itself to a free `https://<name>.puter.site` subdomain from the **Publish** tab instead (needs a free Puter sign-in, which the app does in one click).
+
+
 ---
 
 ## Keyboard shortcuts
@@ -124,6 +137,7 @@ js/
   store.js                 conversations + settings persistence
   markdown.js  util.js  config.js  ui.js
   workers/                 js-sandbox.js, py-sandbox.js
+tests/                     dev-only headless suite (jsdom) — see tests/README.md
 ```
 
 ## Security & privacy notes
@@ -137,7 +151,19 @@ js/
 
 ## Testing
 
-The core logic is covered by a headless suite (jsdom + mocked Puter.js and api.github.com): 88 unit tests over the workspace/shell/tools/agent-protocol/markdown layers, 64 UI tests that boot the real `index.html` and drive chat, agent, approvals and panels, and 42 tests over the GitHub push/Pages and Puter cloud flows.
+**199 assertions** across three suites in [`tests/`](tests/), running the real app code under jsdom with a mocked `window.puter` and a mocked `api.github.com` — no network, no keys, no build step:
+
+```bash
+cd tests && npm install && npm test
+```
+
+| Suite | Assertions | Covers |
+|-------|-----------|--------|
+| `unit.test.mjs` | 88 | workspace CRUD/tree/describe, shell semantics (`ls` `cd` `cat` `head` `tail` `wc` `grep`, pipes, redirects), all 25 tool handlers, both tool-call protocols, history compaction, markdown sanitising |
+| `ui.test.mjs` | 69 | boots the real `index.html`: model picker, streaming chat with reasoning, agent loop over several model calls, approval modal + remembered approvals, text-protocol fallback, mid-run downgrade when a model rejects native tools, files/terminal/github/publish panes, settings persistence, drag & drop, zero runtime errors |
+| `integration.test.mjs` | 42 | GitHub connect, repo select/auto-create, blob → tree → commit → ref, Pages enable, agent-driven `github_push`, PRs + issues, Puter cloud backend, `deploy_to_puter`, `generate_image` |
+
+The suites are dev-only and never referenced by `index.html`, so GitHub Pages ignores them.
 
 ## Credits
 

@@ -6,7 +6,7 @@
  */
 import { STARTERS, BACKENDS, KEYS } from './config.js';
 import {
-  $, $$, el, esc, debounce, prettyError, estimateTokens, downloadBlob,
+  $, $$, el, esc, debounce, prettyError, downloadBlob,
   readStorage, writeStorage, hasOpfs, hasFsAccessApi, formatBytes,
 } from './util.js';
 import { state, loadState, updateSettings, newConversation, setActive, activeConversation, addMessage, updateMessage, removeMessage, deleteConversation, renameConversation, on, saveConversations, pullFromPuterKv } from './store.js';
@@ -422,7 +422,8 @@ function updateContextMeter() {
   const conv = activeConversation();
   const chars = (conv?.messages || []).reduce((a, m) => a + (typeof m.content === 'string' ? m.content.length : 0) +
     (m.toolCalls || []).reduce((b, c) => b + String(c.result || '').length, 0), 0);
-  $('#ctx-meter').textContent = `~${(estimateTokens(chars ? ' '.repeat(Math.min(chars, 400000)) : '')).toLocaleString()} tok`;
+  $('#ctx-meter').textContent = `~${Math.ceil(chars / 4).toLocaleString()} tok`;
+  $('#ctx-meter').title = `Rough context size of this conversation (${chars.toLocaleString()} chars ≈ ${Math.ceil(chars / 4).toLocaleString()} tokens)`;
 }
 
 /* ══════════════════════════ attachments ══════════════════════════ */

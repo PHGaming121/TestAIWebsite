@@ -1,0 +1,19 @@
+{
+  "name": "puter-ai-playground-tests",
+  "private": true,
+  "type": "module",
+  "description": "Dev-only test suite for the Puter AI Playground. Not part of the published site.",
+  "scripts": {
+    "test": "node unit.test.mjs && node ui.test.mjs && node integration.test.mjs",
+    "test:unit": "node unit.test.mjs",
+    "test:ui": "node ui.test.mjs",
+    "test:integration": "node integration.test.mjs",
+    "sync": "rm -rf target && mkdir -p target && cp -r ../js target/js",
+    "lint": "eslint target/js"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0",
+    "jsdom": "^30.0.0"
+  }
+}
