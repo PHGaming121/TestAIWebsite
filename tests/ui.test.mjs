@@ -136,6 +136,13 @@ const ok = (name, cond, extra = '') => {
 const $ = (s) => w.document.querySelector(s);
 const $$ = (s) => [...w.document.querySelectorAll(s)];
 const click = (elm) => elm.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+// boot removes the splash on a timer, so poll instead of sleeping a fixed amount
+const waitFor = async (fn, ms = 5000, step = 40) => {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) { if (fn()) return true; await wait(step); }
+  return fn();
+};
+await waitFor(() => !$('#boot'));
 
 console.log('\n── boot');
 ok('splash removed', !$('#boot'));
