@@ -1,0 +1,53 @@
+# --- Secrets: never commit these -------------------------------------------
+.env
+*.env
+!.env.example
+openclaw/.env
+openclaw/*.env
+!openclaw/.env.example
+*.pem
+*.key
+credentials*.json
+*-credentials.json
+
+# --- OpenClaw state (config lives here at runtime; template is committed) ---
+.openclaw/
+.openclaw-dev/
+openclaw.json
+openclaw.json.bak
+openclaw.json.last-good
+openclaw.json.clobbered.*
+openclaw.json.rejected.*
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+
+# --- Local verification output ---------------------------------------------
+# reports/status.json and reports/verification-report.md are committed on
+# purpose: they are the published evidence. Anything timestamped that is not
+# those two is local noise.
+reports/*.local.*
+tmp/
+*.log
+
+# --- Runtimes and build output ---------------------------------------------
+node_modules/
+.toolchain/
+dist/
+build/
+_site/
+.venv/
+__pycache__/
+*.py[cod]
+
+# --- Editors and OS --------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# --- GitHub Pages ----------------------------------------------------------
+.jekyll-cache/
+.jekyll-metadata
