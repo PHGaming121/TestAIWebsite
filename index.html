@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Puter Playground — Free unlimited AI chat &amp; coding agent</title>
+<meta name="description" content="A free, unlimited AI playground powered by Puter.js. Chat with GPT, Claude, Gemini, DeepSeek and Grok, or run a coding agent that writes files locally, executes code and ships projects to GitHub Pages.">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237c5cff'/%3E%3Cstop offset='1' stop-color='%2322d3ee'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='%230b0d12'/%3E%3Cpath d='M9 23V9h7.5a4.5 4.5 0 0 1 0 9H13v5z' fill='url(%23g)'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/vendor/hljs-theme.css">
+<link rel="stylesheet" href="assets/css/styles.css">
+<script src="https://js.puter.com/v2/"></script>
+<script src="assets/vendor/vendor.bundle.js" defer></script>
+</head>
+<body>
+
+<div id="boot" class="boot">
+  <div class="boot-logo" aria-hidden="true"></div>
+  <div class="boot-text">Starting playground…</div>
+  <div class="boot-bar"><span></span></div>
+</div>
+
+<div class="app" id="app" hidden>
+
+  <!-- ══════════════════ TOP BAR ══════════════════ -->
+  <header class="topbar">
+    <button class="icon-btn only-narrow" id="btn-sidebar" title="Toggle sidebar (Ctrl+B)" aria-label="Toggle sidebar">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M7 19V5h5.5a4.5 4.5 0 0 1 0 9H10v5z"/></svg>
+      </span>
+      <span class="brand-text">
+        <strong>Puter Playground</strong>
+        <small id="brand-sub">free · unlimited · agent-ready</small>
+      </span>
+    </div>
+
+    <div class="mode-switch" role="tablist" aria-label="Mode">
+      <button role="tab" id="mode-chat" data-mode="chat" class="active" title="Plain conversation (Ctrl+1)">
+        <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1-5a8 8 0 1 1 17-6z"/></svg>
+        <span>Chat</span>
+      </button>
+      <button role="tab" id="mode-agent" data-mode="agent" title="Autonomous agent with tools (Ctrl+2)">
+        <svg viewBox="0 0 24 24"><path d="M12 2v3M5 7h14v9a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3zM9 12h.01M15 12h.01M2 12h3M19 12h3"/></svg>
+        <span>Agent</span>
+      </button>
+    </div>
+
+    <div class="model-picker" id="model-picker">
+      <button class="model-btn" id="btn-model" aria-haspopup="listbox" aria-expanded="false">
+        <span class="model-dot" id="model-dot"></span>
+        <span class="model-name" id="model-name">loading models…</span>
+        <svg class="caret" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="model-menu" id="model-menu" hidden>
+        <div class="model-menu-head">
+          <input id="model-search" type="search" placeholder="Search 400+ models…  (Ctrl+K)" autocomplete="off" spellcheck="false">
+          <button class="mini-btn" id="btn-model-refresh" title="Reload live model list">
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg>
+          </button>
+        </div>
+        <div class="model-favs" id="model-favs"></div>
+        <div class="model-groups" id="model-groups"></div>
+        <div class="model-custom">
+          <input id="model-custom-input" type="text" placeholder="or type any model id, e.g. gpt-5.4-nano" spellcheck="false">
+          <button class="mini-btn solid" id="btn-model-custom">Use</button>
+        </div>
+        <div class="model-menu-foot" id="model-menu-foot"></div>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <span class="chip" id="chip-puter" title="Puter.js connection status"><i class="dot"></i> Puter…</span>
+      <button class="icon-btn" id="btn-theme" title="Toggle theme">
+        <svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-settings" title="Settings">
+        <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1v.3a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-2.8-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3.6 14H3a2 2 0 1 1 0-4h.2A1.6 1.6 0 0 0 4.3 7.2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 3.6V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7h.4a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.4 1z"/></svg>
+      </button>
+      <button class="icon-btn only-wide" id="btn-workspace" title="Toggle workspace panel (Ctrl+J)">
+        <svg viewBox="0 0 24 24"><path d="M3 5h18v14H3zM15 5v14"/></svg>
+      </button>
+      <button class="user-btn" id="btn-user" title="Puter account">
+        <span class="avatar" id="user-avatar">?</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <!-- ══════════════════ LAYOUT ══════════════════ -->
+  <main class="layout">
+
+    <!-- ───── SIDEBAR ───── -->
+    <aside class="sidebar" id="sidebar">
+      <button class="btn primary wide" id="btn-new-chat">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> New conversation
+      </button>
+
+      <div class="field-search">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="conv-search" type="search" placeholder="Filter conversations" autocomplete="off">
+      </div>
+
+      <nav class="conv-list" id="conv-list" aria-label="Conversations"></nav>
+
+      <section class="side-block">
+        <h3 class="side-title">Workspace <span class="pill" id="ws-pill">—</span></h3>
+        <div class="backend-list" id="backend-list"></div>
+        <div class="ws-meta" id="ws-meta"></div>
+        <div class="btn-row">
+          <button class="btn tiny" id="btn-import">Import files</button>
+          <button class="btn tiny" id="btn-zip">ZIP</button>
+          <button class="btn tiny danger" id="btn-ws-clear">Clear</button>
+        </div>
+      </section>
+
+      <section class="side-block">
+        <h3 class="side-title">GitHub <span class="pill" id="gh-pill">not linked</span></h3>
+        <div class="gh-body" id="gh-body"></div>
+      </section>
+
+      <footer class="side-foot">
+        <span>Powered by <a href="https://puter.com" target="_blank" rel="noopener">Puter.js</a></span>
+        <span class="muted">no API keys · user-pays model</span>
+      </footer>
+    </aside>
+
+    <!-- ───── CHAT ───── -->
+    <section class="chat" id="chat">
+      <div class="chat-scroll" id="chat-scroll">
+
+        <div class="welcome" id="welcome">
+          <div class="welcome-hero">
+            <h2>Every frontier model. <span class="grad">Zero API keys.</span></h2>
+            <p>Chat with GPT, Claude, Gemini, Grok, DeepSeek and hundreds more for free through
+               Puter.js — or flip on <strong>Agent</strong> and let the model write files, run code
+               in a sandbox, and push the result to GitHub.</p>
+          </div>
+          <div class="welcome-grid" id="welcome-grid"></div>
+          <div class="welcome-hint">
+            <kbd>Ctrl</kbd>+<kbd>Enter</kbd> send · <kbd>Ctrl</kbd>+<kbd>K</kbd> models ·
+            <kbd>Ctrl</kbd>+<kbd>2</kbd> agent mode · <kbd>Esc</kbd> stop
+          </div>
+        </div>
+
+        <div id="messages" class="messages"></div>
+      </div>
+
+      <div class="runbar" id="runbar" hidden>
+        <span class="spinner"></span>
+        <span id="runbar-text">Agent running…</span>
+        <span class="runbar-step" id="runbar-step"></span>
+        <button class="btn tiny danger" id="btn-stop">Stop</button>
+      </div>
+
+      <footer class="composer">
+        <div class="composer-top" id="composer-top">
+          <div class="attachments" id="attachments"></div>
+        </div>
+        <div class="composer-row">
+          <button class="icon-btn ghost" id="btn-attach" title="Attach image / file for the model">
+            <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.5 8.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8-8"/></svg>
+          </button>
+          <textarea id="input" rows="1" placeholder="Ask anything…  (in Agent mode: describe what to build)"
+                    spellcheck="false"></textarea>
+          <button class="send-btn" id="btn-send" title="Send (Ctrl+Enter)">
+            <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+        <div class="composer-foot">
+          <label class="toggle" title="Stream tokens as they arrive">
+            <input type="checkbox" id="opt-stream" checked><span></span> Stream
+          </label>
+          <label class="toggle" title="Let the agent run tools without asking">
+            <input type="checkbox" id="opt-auto"><span></span> Auto-approve tools
+          </label>
+          <span class="spacer"></span>
+          <span class="ctx-meter" id="ctx-meter" title="Approximate context usage">0 tok</span>
+          <span class="mode-hint" id="mode-hint">Chat mode</span>
+        </div>
+      </footer>
+    </section>
+
+    <!-- ───── WORKSPACE PANEL ───── -->
+    <aside class="wpanel" id="wpanel">
+      <div class="wp-tabs" role="tablist">
+        <button class="wp-tab active" data-pane="files" role="tab">
+          <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          Files
+        </button>
+        <button class="wp-tab" data-pane="term" role="tab">
+          <svg viewBox="0 0 24 24"><path d="M4 17l6-5-6-5M12 19h8"/></svg>
+          Terminal
+        </button>
+        <button class="wp-tab" data-pane="github" role="tab">
+          <svg viewBox="0 0 24 24"><path d="M9 19c-4 1.5-4-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-1-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.8 4a4.9 4.9 0 0 0-.1-3.6s-1.4-.4-4.5 1.7a15.4 15.4 0 0 0-8.2 0C3 0 1.6.4 1.6.4A4.9 4.9 0 0 0 1.5 4a5.2 5.2 0 0 0-1.4 3.6c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-1 2.6V21"/></svg>
+          GitHub
+        </button>
+        <button class="wp-tab" data-pane="publish" role="tab">
+          <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          Publish
+        </button>
+      </div>
+
+      <div class="wp-body">
+        <!-- FILES -->
+        <div class="wp-pane active" data-pane="files">
+          <div class="pane-toolbar">
+            <button class="mini-btn" id="btn-refresh-tree" title="Refresh">
+              <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg>
+            </button>
+            <button class="mini-btn" id="btn-new-file" title="New file">
+              <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6"/></svg>
+            </button>
+            <span class="pane-hint" id="tree-hint">workspace</span>
+          </div>
+          <div class="files-split">
+            <div class="file-tree" id="file-tree"></div>
+            <div class="file-view" id="file-view">
+              <div class="file-view-head">
+                <span class="fv-path" id="fv-path">No file selected</span>
+                <span class="fv-actions">
+                  <button class="mini-btn" id="btn-fv-edit" title="Edit">edit</button>
+                  <button class="mini-btn" id="btn-fv-copy" title="Copy">copy</button>
+                  <button class="mini-btn" id="btn-fv-download" title="Download">download</button>
+                </span>
+              </div>
+              <pre class="fv-body" id="fv-body"><code></code></pre>
+              <div class="fv-preview" id="fv-preview" hidden></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TERMINAL -->
+        <div class="wp-pane" data-pane="term">
+          <div class="pane-toolbar">
+            <select id="term-runtime" class="mini-select" title="Runtime for manual commands">
+              <option value="shell">mini-shell</option>
+              <option value="js">javascript</option>
+              <option value="py">python (pyodide)</option>
+            </select>
+            <button class="mini-btn" id="btn-term-run">Run</button>
+            <button class="mini-btn" id="btn-term-clear">Clear</button>
+            <span class="pane-hint" id="term-hint"></span>
+          </div>
+          <div class="term-out" id="term-out"></div>
+          <div class="term-in-row">
+            <span class="term-prompt" id="term-prompt">$</span>
+            <textarea id="term-in" rows="2" placeholder="ls -la   ·   cat index.html   ·   python -c 'print(1+1)'" spellcheck="false"></textarea>
+          </div>
+        </div>
+
+        <!-- GITHUB -->
+        <div class="wp-pane" data-pane="github">
+          <div class="gh-pane" id="gh-pane"></div>
+        </div>
+
+        <!-- PUBLISH -->
+        <div class="wp-pane" data-pane="publish">
+          <div class="pub-pane" id="pub-pane"></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast-root" class="toast-root"></div>
+<input type="file" id="file-picker" multiple hidden>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

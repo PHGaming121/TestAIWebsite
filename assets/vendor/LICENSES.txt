@@ -1,0 +1,12 @@
+Third-party libraries bundled into assets/vendor/vendor.bundle.js
+=================================================================
+
+marked (v18)            MIT License   https://github.com/markedjs/marked
+DOMPurify (v3)          MPL-2.0 / Apache-2.0   https://github.com/cure53/DOMPurify
+highlight.js (v11)      BSD-3-Clause  https://github.com/highlightjs/highlight.js
+JSZip (v3)              MIT / GPL-3.0 https://github.com/Stuk/jszip
+
+hljs-theme.css is highlight.js' "github-dark-dimmed" theme (BSD-3-Clause).
+
+These files are vendored so the playground works with no CDN dependency at
+runtime. Puter.js itself is loaded from https://js.puter.com/v2/ (Apache-2.0).
