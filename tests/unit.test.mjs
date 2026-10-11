@@ -39,7 +39,7 @@ const { runShell } = await import(`${ROOT}/exec.js`);
 const { ALL_TOOLS, TOOL_MAP, nativeToolSchemas, toolsDoc } = await import(`${ROOT}/tools.js`);
 const { parseToolBlocks, toProviderMessages, agentSystemPrompt, chatSystemPrompt, toolResultsMessage } = await import(`${ROOT}/agent.js`);
 const { renderMarkdownInto, mdToHtml } = await import(`${ROOT}/markdown.js`);
-const { guessProvider } = await import(`${ROOT}/llm.js`);
+const { guessProvider, explainAiError } = await import(`${ROOT}/llm.js`);
 const util = await import(`${ROOT}/util.js`);
 
 let pass = 0, fail = 0;
@@ -234,6 +234,20 @@ ok('guessProvider claude', guessProvider('claude-sonnet-4-5') === 'anthropic');
 ok('guessProvider prefixed', guessProvider('google/gemini-3.1-pro') === 'google');
 ok('guessProvider gpt', guessProvider('gpt-5.4-nano') === 'openai');
 ok('guessProvider deepseek', guessProvider('deepseek-reasoner') === 'deepseek');
+
+/* ══════ friendly AI errors ══════ */
+section('explainAiError');
+const creditMsg = explainAiError(new Error('insufficient credits: your balance is too low'), { model: 'claude-sonnet-4-5' });
+ok('credit exhaustion explains the allowance', /allowance/i.test(creditMsg) && /puter\.com/.test(creditMsg), creditMsg);
+ok('credit message offers a lighter model', /lighter model/i.test(creditMsg));
+const signInMsg = explainAiError(new Error('401 Unauthorized: user must sign in'), { model: 'gpt-5.4' });
+ok('auth error points at the free sign-in', /sign in/i.test(signInMsg) && /free/.test(signInMsg), signInMsg);
+const rateMsg = explainAiError(new Error('429 Too Many Requests'));
+ok('rate limit is explained', /rate-limited|busy/i.test(rateMsg), rateMsg);
+const modelMsg = explainAiError(new Error('model not found: foo/bar-9'), { model: 'foo/bar-9' });
+ok('unknown model suggests the picker', /model picker|Ctrl/i.test(modelMsg), modelMsg);
+ok('unrelated errors are left alone', explainAiError(new Error('socket hang up')) === null);
+ok('non-Error values are handled', typeof explainAiError({ message: 'quota exceeded' }) === 'string');
 
 console.log(`\n═══ ${pass} passed, ${fail} failed ═══`);
 process.exit(fail ? 1 : 0);

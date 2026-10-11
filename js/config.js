@@ -22,6 +22,7 @@ export const KEYS = {
   workspaceMem: 'pp.workspace.memory.v1',
   theme: 'pp.theme.v1',
   allowTools: 'pp.tools.allow.v1',
+  seenSignInNote: 'pp.seenSignInNote.v1',
 };
 
 /** How long a cached model catalogue stays fresh (ms). */
@@ -52,6 +53,7 @@ export const DEFAULTS = {
   githubRepo: '',
   syncPuterKv: false,
   compactToolHistory: true,
+  panelOpen: null,      // null = auto (open on wide screens, closed on narrow)
 };
 
 /**

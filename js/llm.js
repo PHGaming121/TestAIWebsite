@@ -143,6 +143,41 @@ class ToolCallAccumulator {
  * @param {Function} [o.isCancelled]  polled between chunks; return true to stop the stream
  * @returns {Promise<{text:string, reasoning:string, toolCalls:Array, usage:object, finishReason:string}>}
  */
+/**
+ * Puter.js surfaces provider and account problems as raw API errors. Translate
+ * the ones a user can actually act on — especially "you need to sign in" and
+ * "your account is out of allowance" — into something readable.
+ * Returns null when there is nothing useful to add.
+ */
+export function explainAiError(e, { model } = {}) {
+  const raw = prettyError(e);
+  const s = ` ${String(raw).toLowerCase()} `;
+  const which = model ? ` for “${shortModelName(model)}”` : '';
+
+  if (/credit|quota|allowance|insufficient|out of (funds|balance)|payment|billing|balance|402|upgrade (your|to) (plan|account)/.test(s)) {
+    return `Your Puter account has used up its included AI allowance${which}. Puter meters usage against your own (free) account — nothing this app can bypass. Either wait for the allowance to reset, add credits at puter.com, or pick a lighter model in the model picker.`;
+  }
+  if (/sign ?in|signed ?in|log ?in|logged ?in|unauthoriz|unauthenticated|authentication required|not authenticated|401|guest (mode|user)/.test(s)) {
+    return `Puter wants you signed in${which}. Click “Sign in to Puter (free)” in the top bar — it is free, needs no card, and unlocks the models, the cloud workspace and *.puter.site publishing.`;
+  }
+  if (/rate.?limit|429|too many requests|overloaded|capacity/.test(s)) {
+    return `That model is rate-limited or busy right now${which}. Try again in a moment, or switch to a different model in the picker.`;
+  }
+  if (/model.{0,40}(not (found|available|supported)|does not exist|unavailable|invalid)|unknown model|no such model|unsupported model/.test(s)) {
+    return `“${model || 'that model'}” is not available to your Puter account. Open the model picker (Ctrl/⌘+K) and choose another — the live list only shows models you can actually call.`;
+  }
+  return null;
+}
+
+/** Re-throw `e` with a friendlier message when one applies; otherwise pass it through. */
+function friendlierError(e, model) {
+  const friendly = explainAiError(e, { model });
+  if (!friendly) return e instanceof Error ? e : new Error(prettyError(e));
+  const err = new Error(friendly);
+  err.cause = e;
+  return err;
+}
+
 export async function chat(o) {
   const puter = await ensurePuter();
   const {
@@ -166,7 +201,9 @@ export async function chat(o) {
   const cancelled = () => !!isCancelled?.();
 
   if (!stream) {
-    const res = await puter.ai.chat(messages, options);
+    let res;
+    try { res = await puter.ai.chat(messages, options); }
+    catch (e) { throw friendlierError(e, model); }
     const msg = res?.message || res;
     text = contentToText(msg?.content ?? res);
     reasoning = msg?.reasoning || '';
@@ -178,7 +215,9 @@ export async function chat(o) {
     return { text, reasoning, toolCalls: calls, usage, finishReason };
   }
 
-  const iterable = await puter.ai.chat(messages, options);
+  let iterable;
+  try { iterable = await puter.ai.chat(messages, options); }
+  catch (e) { throw friendlierError(e, model); }
 
   // Some builds resolve to a plain object instead of an async iterable.
   if (!iterable || typeof iterable[Symbol.asyncIterator] !== 'function') {
@@ -220,7 +259,7 @@ export async function chat(o) {
         break;
       }
       case 'error': {
-        throw new Error(part.message || part.error?.message || 'Model returned a stream error');
+        throw friendlierError(part.message || part.error?.message || part.error || 'Model returned a stream error', model);
       }
       case 'image': {
         // Vision/image-output models can emit images mid-stream; surfaced by the caller if needed.

@@ -120,7 +120,9 @@ w.addEventListener('error', (e) => errors.push(String(e.error?.stack || e.messag
 process.on('unhandledRejection', (r) => errors.push('unhandledRejection: ' + (r?.stack || r)));
 
 // start in agent mode with auto-approve so tools run without a dialog
-w.localStorage.setItem('pp.settings.v1', JSON.stringify({ mode: 'agent', autoApprove: true, stream: true, maxSteps: 6 }));
+w.localStorage.setItem('pp.settings.v1', JSON.stringify({ mode: 'agent', autoApprove: true, stream: true, maxSteps: 6, panelOpen: true }));
+// the signed-out billing note is asserted in its own section further down
+w.localStorage.setItem('pp.seenSignInNote.v1', '1');
 
 const appModule = await import(`${REPO_ROOT}/js/app.js`);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -139,7 +141,8 @@ console.log('\n── boot');
 ok('splash removed', !$('#boot'));
 ok('app visible', $('#app') && $('#app').hidden === false);
 ok('no boot errors', errors.length === 0, errors.slice(0, 3).join(' | '));
-ok('puter chip ok', $('#chip-puter').className.includes('ok'), $('#chip-puter').textContent);
+ok('puter chip reports status', /\bok\b|\bwarn\b/.test($('#chip-puter').className), $('#chip-puter').className);
+ok('signed-out chip invites a free sign-in', $('#chip-puter').textContent.includes('Sign in to Puter (free)'), $('#chip-puter').textContent);
 ok('backends rendered', $$('#backend-list .backend').length === 4);
 ok('memory backend selected (no OPFS in jsdom)', $('#ws-pill').textContent === 'memory', $('#ws-pill').textContent);
 ok('agent mode active from settings', $('#mode-agent').classList.contains('active'));
@@ -281,6 +284,45 @@ click($$('.wp-tab').find((t) => t.dataset.pane === 'term'));
 await wait(120);
 ok('terminal shows shell help hint', /mini shell/.test($('#term-out').textContent));
 
+console.log('\n── workspace panel: open / close');
+ok('panel was open at boot (remembered setting)', $('#wpanel').classList.contains('open'));
+ok('panel has a close button', !!$('#btn-wp-close'));
+click($('#btn-wp-close'));
+await wait(60);
+ok('close button hides the panel', !$('#wpanel').classList.contains('open'));
+await wait(300);   // settings writes are debounced
+ok('closing persisted to settings', JSON.parse(w.localStorage.getItem('pp.settings.v1')).panelOpen === false);
+click($('#btn-workspace'));
+await wait(60);
+ok('topbar button re-opens it', $('#wpanel').classList.contains('open'));
+await wait(300);
+ok('reopen persisted to settings', JSON.parse(w.localStorage.getItem('pp.settings.v1')).panelOpen === true);
+click($$('.wp-tab').find((t) => t.dataset.pane === 'term'));
+await wait(60);
+ok('clicking the already-active tab collapses the panel', !$('#wpanel').classList.contains('open'));
+click($$('.wp-tab').find((t) => t.dataset.pane === 'term'));
+await wait(60);
+ok('clicking it again re-opens on that tab', $('#wpanel').classList.contains('open') && $('.wp-tab.active').dataset.pane === 'term');
+w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'j', ctrlKey: true, bubbles: true }));
+await wait(60);
+ok('Ctrl+J toggles the panel shut', !$('#wpanel').classList.contains('open'));
+w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'j', ctrlKey: true, bubbles: true }));
+await wait(60);
+ok('Ctrl+J toggles it back open', $('#wpanel').classList.contains('open'));
+w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+await wait(60);
+ok('Escape closes it', !$('#wpanel').classList.contains('open'));
+click($('#btn-workspace'));
+await wait(60);
+
+console.log('\n── css regressions');
+const css = fs.readFileSync(`${REPO_ROOT}/assets/css/styles.css`, 'utf8');
+ok('[hidden] wins over component display rules', /\[hidden\]\{display:none!important\}/.test(css));
+ok('model menu is not permanently visible', /\.model-menu\{[^}]*display:flex/.test(css) && /\[hidden\]\{display:none!important\}/.test(css));
+ok('workspace panel is hidden until opened', /\.wpanel\{[^}]*display:none/.test(css) && /\.wpanel\.open\{display:flex\}/.test(css));
+ok('narrow screens still slide the drawer', /@media \(max-width:1180px\)\{\s*\.wpanel\{display:flex/.test(css));
+ok('workspace toggle is reachable on phones', !/only-wide" id="btn-workspace/.test(fs.readFileSync(`${REPO_ROOT}/index.html`, 'utf8')));
+
 console.log('\n── settings modal');
 click($('#btn-settings'));
 await wait(150);
@@ -331,6 +373,43 @@ ok('fallback executed the tool', await (await import(`${REPO_ROOT}/js/workspace.
 ok('user was told about the downgrade', /text protocol|rejected native/i.test($('#term-out').textContent), $('#term-out').textContent.slice(-160));
 ok('no tool role leaked into a tools-less request', !puterCalls.slice(before).filter((c) => !c.options.tools).some((c) => c.messages.some((m) => m.role === 'tool')));
 rejectToolsOnce = false;
+
+console.log('\n── signed-out Puter pre-flight');
+w.localStorage.removeItem('pp.seenSignInNote.v1');
+signedIn = false;
+click($('#mode-chat'));
+await wait(80);
+click($('#btn-new-chat'));
+await wait(150);
+scripted = [[{ type: 'text', text: 'Hi there.' }]];
+const callsBefore = puterCalls.length;
+$('#input').value = 'hello';
+click($('#btn-send'));
+await wait(150);
+const note = $('.modal-backdrop');
+ok('first message while signed out explains the Puter login', !!note && /Puter billing works/.test(note.textContent), note?.textContent?.slice(0, 90));
+ok('it says signing in is free and needs no card', /free/.test(note?.textContent || '') && /no card/.test(note?.textContent || ''));
+ok('it is honest about the allowance ceiling', /allowance/i.test(note?.textContent || '') && /credits|upgrade/i.test(note?.textContent || ''));
+ok('it says the site owner pays nothing', /pays \$0|pays nothing/i.test(note?.textContent || ''));
+ok('no model call happened yet', puterCalls.length === callsBefore);
+click([...note.querySelectorAll('button')].find((b) => /not now/i.test(b.textContent)));
+await wait(120);
+ok('cancelling aborts the send', puterCalls.length === callsBefore && !w.localStorage.getItem('pp.seenSignInNote.v1'));
+$('#input').value = 'hello';
+click($('#btn-send'));
+await wait(150);
+const note2 = $('.modal-backdrop');
+click([...note2.querySelectorAll('button')].find((b) => /continue/i.test(b.textContent)));
+await wait(700);
+ok('continuing sends the message', puterCalls.length > callsBefore);
+ok('the note is not shown again', w.localStorage.getItem('pp.seenSignInNote.v1') === '1');
+ok('topbar invites a free sign-in while signed out', /sign in to puter \(free\)/i.test($('#chip-puter').textContent), $('#chip-puter').textContent);
+click($('#chip-puter'));
+await wait(120);
+ok('account modal explains who pays', /Who pays for the AI\?/.test($('.modal-body')?.textContent || ''), $('.modal-body')?.textContent?.slice(0, 80));
+click($('.modal-head .icon-btn'));
+await wait(80);
+signedIn = true;
 
 console.log('\n── errors');
 ok('no runtime errors during the whole run', errors.length === 0, errors.slice(0, 4).join(' | '));

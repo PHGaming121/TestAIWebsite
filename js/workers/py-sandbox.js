@@ -1,3 +1,4 @@
+/* global importScripts */
 /**
  * Pyodide worker: real CPython (compiled to WASM) in the browser.
  *

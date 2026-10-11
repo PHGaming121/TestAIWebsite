@@ -47,6 +47,10 @@ html[data-theme="light"]{
 }
 
 *{box-sizing:border-box}
+/* The `hidden` attribute only works if no author rule sets `display` on the
+   element. Several components here do (.model-menu, .app, .banner, .fv-preview),
+   so re-assert it globally — otherwise hidden panels stay visible. */
+[hidden]{display:none!important}
 html,body{height:100%}
 body{
   margin:0;background:var(--bg);background-image:var(--bg-grad);background-attachment:fixed;
@@ -443,10 +447,17 @@ html[data-theme="light"] .code-wrap{background:#fbfcfe}
 
 /* ── workspace panel ─────────────────────────────────────── */
 .wpanel{
-  width:var(--wpanel-w);flex:none;display:flex;flex-direction:column;background:var(--panel);
+  width:var(--wpanel-w);flex:none;display:none;flex-direction:column;background:var(--panel);
   border-left:1px solid var(--border);min-width:0;
 }
+.wpanel.open{display:flex}
 .wp-tabs{display:flex;gap:2px;padding:8px 8px 0;border-bottom:1px solid var(--border);flex:none;overflow-x:auto}
+.wp-close{
+  margin-left:auto;align-self:center;flex:none;width:27px;height:27px;display:grid;place-items:center;
+  border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;transition:.14s;
+}
+.wp-close:hover{color:var(--text);background:var(--panel-2)}
+.wp-close svg{width:15px;height:15px}
 .wp-tab{
   display:flex;align-items:center;gap:6px;padding:7px 12px;border:0;background:transparent;cursor:pointer;
   color:var(--muted);font-size:12.5px;font-weight:600;border-radius:9px 9px 0 0;border-bottom:2px solid transparent;
@@ -550,6 +561,8 @@ select.inp{cursor:pointer}
 .modal-head{display:flex;align-items:center;gap:10px;padding:15px 18px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel);z-index:2}
 .modal-head h3{margin:0;font-size:15.5px;letter-spacing:-.01em}
 .modal-head .icon-btn{margin-left:auto}
+.modal-body ul.tight{margin:8px 0;padding-left:20px}
+.modal-body ul.tight li{margin:5px 0}
 .modal-body{padding:16px 18px}
 .modal-foot{display:flex;gap:9px;justify-content:flex-end;padding:14px 18px;border-top:1px solid var(--border);position:sticky;bottom:0;background:var(--panel);flex-wrap:wrap}
 .setting-group{margin-bottom:20px}
@@ -587,7 +600,7 @@ input[type=range]{accent-color:var(--accent);width:130px}
 /* ── responsive ──────────────────────────────────────────── */
 .only-narrow{display:none}
 @media (max-width:1180px){
-  .wpanel{position:fixed;top:0;right:0;bottom:0;z-index:70;width:min(560px,94vw);transform:translateX(102%);transition:transform .24s ease;box-shadow:var(--shadow)}
+  .wpanel{display:flex;position:fixed;top:0;right:0;bottom:0;z-index:70;width:min(560px,94vw);transform:translateX(102%);transition:transform .24s ease;box-shadow:var(--shadow)}
   .wpanel.open{transform:none}
   .only-wide{display:none}
 }

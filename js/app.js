@@ -116,6 +116,9 @@ async function boot() {
   setMode(activeConversation()?.mode || state.settings.mode, { silent: true });
   refreshWorkspaceMeta();
 
+  // panel state: remember it; default open on wide screens, closed on narrow ones
+  setPanelOpen(state.settings.panelOpen ?? window.innerWidth > 1180, { persist: false });
+
   // reveal
   $('#boot').classList.add('gone');
   setTimeout(() => $('#boot').remove(), 400);
@@ -136,7 +139,8 @@ async function boot() {
 function signedInLabel() {
   try {
     if (!window.puter?.auth) return 'Puter ready';
-    return window.puter.auth.isSignedIn() ? 'Puter · signed in' : 'Puter ready';
+    // Signed out is a call to action, not a status: the models need a (free) login.
+    return window.puter.auth.isSignedIn() ? 'Puter · signed in' : 'Sign in to Puter (free)';
   } catch { return 'Puter ready'; }
 }
 
@@ -205,7 +209,8 @@ function wireStaticControls() {
 
   // sidebar / panel toggles
   $('#btn-sidebar').onclick = () => $('#sidebar').classList.toggle('open');
-  $('#btn-workspace').onclick = () => $('#wpanel').classList.toggle('open');
+  $('#btn-workspace').onclick = () => setPanelOpen(!panelOpen());
+  $('#btn-wp-close').onclick = () => setPanelOpen(false);
   $('#btn-settings').onclick = () => openSettingsModal();
   $('#btn-theme').onclick = () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
   $('#chip-puter').onclick = () => puterAccountModal();
@@ -238,26 +243,43 @@ function wireStaticControls() {
   $('#btn-term-clear').onclick = () => app.termPane.clear();
   $('#term-runtime').onchange = (e) => app.termPane.setRuntime(e.target.value);
 
-  // workspace panel tabs
-  $$('.wp-tab').forEach((t) => { t.onclick = () => switchTab(t.dataset.pane); });
+  // workspace panel tabs — clicking the active tab collapses the panel again
+  $$('.wp-tab').forEach((t) => {
+    t.onclick = () => {
+      if (t.dataset.pane === activeTab() && panelOpen()) setPanelOpen(false);
+      else switchTab(t.dataset.pane);
+    };
+  });
 
   // global shortcuts
   document.addEventListener('keydown', (e) => {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); app.picker.focusSearch(); }
     if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); $('#sidebar').classList.toggle('open'); }
-    if (mod && e.key.toLowerCase() === 'j') { e.preventDefault(); $('#wpanel').classList.toggle('open'); }
+    if (mod && e.key.toLowerCase() === 'j') { e.preventDefault(); setPanelOpen(!panelOpen()); }
     if (mod && e.key === '1') { e.preventDefault(); setMode('chat'); }
     if (mod && e.key === '2') { e.preventDefault(); setMode('agent'); }
     if (mod && e.key.toLowerCase() === 'n' && e.shiftKey) { e.preventDefault(); startNewConversation(); }
     if (e.key === 'Escape' && app.cancelRef.current !== undefined && state.busy) stopRun();
+    else if (e.key === 'Escape' && panelOpen() && !document.querySelector('.modal-backdrop')) setPanelOpen(false);
   });
+}
+
+/* ── workspace panel visibility (desktop: shown inline, narrow: slide-in drawer) ── */
+const activeTab = () => $('.wp-tab.active')?.dataset.pane || 'files';
+const panelOpen = () => $('#wpanel').classList.contains('open');
+
+function setPanelOpen(open, { persist = true } = {}) {
+  $('#wpanel').classList.toggle('open', !!open);
+  $('#btn-workspace')?.setAttribute('aria-expanded', String(!!open));
+  if (persist) updateSettings({ panelOpen: !!open });
+  if (open && activeTab() === 'files') app.filesPane?.refresh();
 }
 
 function switchTab(name) {
   $$('.wp-tab').forEach((t) => t.classList.toggle('active', t.dataset.pane === name));
   $$('.wp-pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === name));
-  $('#wpanel').classList.add('open');
+  setPanelOpen(true);
   if (name === 'files') app.filesPane.refresh();
   if (name === 'github') app.ghPane.renderSide();
 }
@@ -289,9 +311,10 @@ async function refreshUserButton() {
   if (user?.avatar || user?.profile?.picture) {
     av.append(el('img', { src: user.avatar || user.profile.picture, alt: user.username || 'user' }));
   } else {
-    av.textContent = (user?.username || '?').slice(0, 1).toUpperCase();
+    av.textContent = user ? (user.username || '?').slice(0, 1).toUpperCase() : '+';
   }
-  setPuterChip(user ? 'ok' : 'ok', user ? `Puter · ${user.username}` : 'Puter ready');
+  $('#btn-user').title = user ? `Puter account: ${user.username || user.email}` : 'Sign in to Puter (free) — needed to call the models';
+  setPuterChip(user ? 'ok' : 'warn', user ? `Puter · ${user.username}` : 'Sign in to Puter (free)');
 }
 
 /* ══════════════════════════ sidebar ══════════════════════════ */
@@ -478,6 +501,9 @@ async function send(textOverride) {
   // `textOverride` must be a string — event handlers pass an Event, which we ignore
   const text = (typeof textOverride === 'string' ? textOverride : input.value).trim();
   if (!text && !app.attachments.length) { input.focus(); return; }
+
+  // Puter pops its own login window on the first model call — explain that first.
+  if (!await maybeExplainPuter()) { input.focus(); return; }
 
   let conv = activeConversation();
   const mode = state.settings.mode;
@@ -719,6 +745,54 @@ function buildWelcome() {
 }
 
 /* ══════════════════════════ puter account ══════════════════════════ */
+
+/**
+ * Shown once, before the first message, while signed out: Puter.js pops its own
+ * login window on the first model call and users deserve to know what that means
+ * for their money *before* it appears, not after.
+ */
+async function maybeExplainPuter() {
+  try { if (localStorage.getItem(KEYS.seenSignInNote)) return true; } catch { return true; }
+  // Puter not loaded (or mocked away): the normal error path will explain instead.
+  if (typeof window.puter?.auth?.isSignedIn !== 'function') return true;
+  try {
+    if (window.puter.auth.isSignedIn()) {
+      localStorage.setItem(KEYS.seenSignInNote, '1');
+      return true;
+    }
+  } catch { return true; }
+
+  const ok = await confirmDialog({
+    title: 'Before your first message — how Puter billing works',
+    html: true,
+    confirmLabel: 'Got it, continue',
+    cancelLabel: 'Not now',
+    message: `
+      <p>This site has <b>no server and no API keys</b>. It reaches the models through
+      <b>Puter.js</b>, which uses a <b>&ldquo;user pays&rdquo;</b> model:</p>
+      <ul class="tight">
+        <li><b>Signing in is free</b> — no card, no paid plan. A Puter window pops up on
+            the first model call; that is Puter's own login, not this app's.</li>
+        <li>Your Puter account comes with an <b>included free allowance</b> of AI usage,
+            which covers ordinary chatting and coding sessions.</li>
+        <li>If you exhaust that allowance, <b>Puter</b> (not this app) asks you to add
+            credits or upgrade. Nothing here can charge you behind your back — you always
+            see Puter's own prompt, and you can stop at any time.</li>
+        <li>Whoever published this site pays <b>$0</b>: there is no shared key and no
+            quota baked into the app, which is why it can offer every model.</li>
+      </ul>
+      <p class="hint">So &ldquo;unlimited&rdquo; means: no limits imposed by <i>this app</i>.
+      Your own Puter account&rsquo;s allowance is the real ceiling.</p>`,
+  });
+
+  if (ok) {
+    try { localStorage.setItem(KEYS.seenSignInNote, '1'); } catch { /* private mode */ }
+    return true;
+  }
+  toast('Puter will ask you to sign in (free) when you send a message', { type: 'warn', timeout: 6000 });
+  return false;
+}
+
 async function puterSignIn() {
   try {
     await ensurePuter();
@@ -733,10 +807,10 @@ function puterAccountModal() {
   const user = state.puterUser;
   const body = el('div', {},
     user ? el('div.notice.ok', { html: `Signed in as <b>${esc(user.username || user.email || 'user')}</b>${user.email ? ` (${esc(user.email)})` : ''}<br>UUID: <code>${esc(user.uuid || '—')}</code>` })
-         : el('div.notice', { html: 'Not signed in. Puter.js still works — signing in is free and raises your AI allowance, unlocks the cloud workspace and lets you publish to <code>*.puter.site</code>.' }),
+         : el('div.notice', { html: 'Not signed in. Signing in is <b>free</b> and needs no card — it unlocks the models, the cloud workspace and publishing to <code>*.puter.site</code>. Puter.js pops this window up automatically on the first model call.' }),
     el('div.setting-group', { style: { marginTop: '14px' } },
-      el('h4', { text: 'Why “unlimited”?' }),
-      el('p.hint', { style: { fontSize: '12.6px', color: 'var(--text-dim)' }, html: `This playground has no API keys and no server. Puter.js runs a <i>user-pays</i> model: each visitor's own free Puter account covers the AI calls, so the app itself has no quota to enforce. There is nothing to buy and nothing to configure here.` }),
+      el('h4', { text: 'Who pays for the AI?' }),
+      el('p.hint', { style: { fontSize: '12.6px', color: 'var(--text-dim)' }, html: `This playground has no API keys and no server, so it has no bill of its own. Puter.js runs a <i>user-pays</i> model: your own Puter account covers your AI calls. Accounts are free to create and include a free allowance; if you exhaust it, Puter asks you to add credits or upgrade — that prompt comes from Puter, never from this app, and the person hosting this site pays nothing either way.` }),
     ),
     el('div.setting-group', {},
       el('h4', { text: 'Session' }),
