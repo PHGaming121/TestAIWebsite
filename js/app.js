@@ -16,6 +16,7 @@ import { ChatView, renderStarters } from './chat.js';
 import { FilesPane, TermPane } from './panels.js';
 import { GitHubPane } from './github-pane.js';
 import { PublishPane } from './publish-pane.js';
+import { MediaPane } from './media-pane.js';
 import { ModelPicker } from './modelpicker.js';
 import { openSettings } from './settings.js';
 import { icon, toast, openModal, confirmDialog, promptDialog, approvalDialog, askUserDialog } from './ui.js';
@@ -39,10 +40,13 @@ async function boot() {
     messages: $('#messages'),
     scroll: $('#chat-scroll'),
     welcome: $('#welcome'),
+    getWs: () => workspace(),
     handlers: {
       onRegenerate: (m) => regenerate(m),
       onEditUser: (m) => editUserMessage(m),
       onDelete: (m) => deleteMsg(m),
+      onMediaAdded: () => saveConversations(),
+      onOpenFile: (path) => { switchTab('files'); app.filesPane.open(path).catch(() => {}); },
     },
   });
 
@@ -101,6 +105,12 @@ async function boot() {
     },
     onConnected: () => { refreshWorkspaceMeta(); },
   });
+  app.mediaPane = new MediaPane({
+    container: $('#media-pane'), getWs: () => workspace(),
+    onMedia: (media) => app.chatView.showMedia(activeConversation(), media),
+    openFile: (path) => { switchTab('files'); app.filesPane.open(path).catch(() => {}); },
+  });
+
   app.pubPane = new PublishPane({
     container: $('#pub-pane'), getWs: () => workspace(),
     state: {
@@ -281,6 +291,7 @@ function switchTab(name) {
   $$('.wp-pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === name));
   setPanelOpen(true);
   if (name === 'files') app.filesPane.refresh();
+  if (name === 'create') app.mediaPane?.loadRefs();
   if (name === 'github') app.ghPane.renderSide();
 }
 
@@ -607,6 +618,7 @@ async function runTurn(conv) {
     onProgress: (frac, label) => setRunbar(true, label, frac),
     onWorkspaceChanged: () => { app.filesPane.refresh(); refreshWorkspaceMeta(); },
     askUser: (q, options) => askUserDialog(q, options),
+    onMedia: (media) => { app.chatView.showMedia(activeConversation(), media); app.filesPane.refresh(); },
     requestApproval: (call) => approvalDialog(call),
     setRepo: (full) => app.ghPane?.setRepo(full),
   };

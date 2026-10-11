@@ -3,7 +3,7 @@
  * and the terminal (mini-shell / JavaScript / Python).
  */
 import {
-  el, basename, dirname, formatBytes, hljsLang, isTextPath, isImagePath,
+  el, basename, dirname, formatBytes, hljsLang, isTextPath, isImagePath, isVideoPath, isAudioPath,
   prettyError, downloadBlob, lib,
 } from './util.js';
 import { icon, toast, promptDialog, confirmDialog } from './ui.js';
@@ -167,6 +167,18 @@ export class FilesPane {
         this.previewEl.innerHTML = '';
         this.previewEl.append(el('div', { style: { display: 'grid', placeItems: 'center', height: '100%', padding: '12px', background: 'repeating-conic-gradient(#1b202c 0 25%, #151924 0 50%) 50%/18px 18px' } },
           el('img', { src: url, style: { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '8px' } })));
+        return;
+      }
+      if (isVideoPath(path) || isAudioPath(path)) {
+        const blob = await ws.readBlob(path);
+        const url = URL.createObjectURL(blob);
+        this.bodyEl.style.display = 'none';
+        this.previewEl.hidden = false;
+        this.previewEl.innerHTML = '';
+        this.previewEl.append(el('div', { style: { display: 'grid', placeItems: 'center', height: '100%', padding: '12px', background: '#0d111a' } },
+          isVideoPath(path)
+            ? el('video', { src: url, controls: true, playsinline: true, style: { maxWidth: '100%', maxHeight: '100%', borderRadius: '8px' } })
+            : el('audio', { src: url, controls: true, style: { width: 'min(420px,100%)' } })));
         return;
       }
       if (!isTextPath(path)) {

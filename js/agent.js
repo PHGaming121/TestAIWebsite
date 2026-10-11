@@ -232,6 +232,7 @@ function downgradeToolMessages(messages) {
  * @property {(frac:number,label:string)=>void} onProgress
  * @property {()=>void} onWorkspaceChanged
  * @property {(question:string,options:string[])=>Promise<string>} [askUser]
+ * @property {(media:{kind:string,path:string,url?:string,model?:string,prompt?:string,testMode?:boolean})=>void} [onMedia]
  * @property {(call:object)=>Promise<{allow:boolean,remember:boolean,reason?:string}>} [requestApproval]
  * @property {(fullName:string)=>void} [setRepo]
  */
@@ -298,6 +299,9 @@ export async function runAgentTurn(o) {
     github: creds?.token ? clientFromStorage() : null,
     askUser: ui.askUser,
     setRepo: ui.setRepo,
+    // media tools hand their result straight to the transcript; the bytes never
+    // go back to the model (a base64 image in context would burn credits for nothing)
+    onMedia: (m) => ui.onMedia?.(m),
     onOutput: (level, text) => ui.onOutput?.(level, text),
     onProgress: (frac, label) => ui.onProgress?.(frac, label),
     touch: () => ui.onWorkspaceChanged?.(),

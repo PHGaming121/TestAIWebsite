@@ -19,7 +19,7 @@ Object.defineProperty(globalThis, 'window', { value: w, configurable: true, writ
 Object.defineProperty(globalThis, 'navigator', { value: w.navigator, configurable: true, writable: true });
 globalThis.indexedDB = undefined;
 w.scrollTo = () => {};
-await import('/tmp/bundle/vendor.bundle.js');
+await import(`${REPO_ROOT}/assets/vendor/vendor.bundle.js`);
 
 /* ── GitHub API mock ───────────────────────────────────── */
 const gh = { calls: [], blobs: {}, repoExists: false, pagesEnabled: false, refs: {} };

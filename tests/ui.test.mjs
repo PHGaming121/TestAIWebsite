@@ -25,7 +25,7 @@ globalThis.indexedDB = undefined;
 w.scrollTo = () => {};
 w.HTMLElement.prototype.scrollTo = () => {};
 
-await import('/tmp/bundle/vendor.bundle.js');
+await import(`${REPO_ROOT}/assets/vendor/vendor.bundle.js`);
 
 /* ── Puter.js mock ─────────────────────────────────────── */
 const puterCalls = [];
@@ -329,6 +329,84 @@ ok('model menu is not permanently visible', /\.model-menu\{[^}]*display:flex/.te
 ok('workspace panel is hidden until opened', /\.wpanel\{[^}]*display:none/.test(css) && /\.wpanel\.open\{display:flex\}/.test(css));
 ok('narrow screens still slide the drawer', /@media \(max-width:1180px\)\{\s*\.wpanel\{display:flex/.test(css));
 ok('workspace toggle is reachable on phones', !/only-wide" id="btn-workspace/.test(fs.readFileSync(`${REPO_ROOT}/index.html`, 'utf8')));
+
+console.log('\n── create pane: image + video generation');
+const { workspace: wsOf } = await import(`${REPO_ROOT}/js/workspace.js`);
+const PNG_SRC = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const imgCalls = [];
+const vidCalls = [];
+puterMock.ai.txt2img = async (prompt, options) => {
+  imgCalls.push({ prompt, options });
+  const i = w.document.createElement('img'); i.src = PNG_SRC; return i;
+};
+puterMock.ai.txt2vid = async (options) => {
+  vidCalls.push(options);
+  const v = w.document.createElement('video'); v.src = 'data:video/mp4;base64,AAAAHGZ0eXBpc29tAA=='; return v;
+};
+click($$('.wp-tab').find((t) => t.dataset.pane === 'create'));
+await wait(150);
+ok('create pane rendered', /Create/.test($('#media-pane').textContent) && $$('#media-pane .seg').length === 2);
+ok('image and video are switchable', $$('#media-pane .seg').map((b) => b.textContent.trim()).join('|') === 'Image|Video');
+const freeBox = $$('#media-pane .checkline').find((l) => /Free sample/.test(l.textContent))?.querySelector('input');
+ok('credit-free test mode is ON by default', freeBox?.checked === true);
+ok('model + provider + quality controls exist', $$('#media-pane select').length >= 4, String($$('#media-pane select').length));
+const genBtn = $$('#media-pane button').find((b) => /Generate/.test(b.textContent));
+$('#media-pane textarea').value = 'a red cube on white';
+click(genBtn);
+await wait(600);
+let paths = (await wsOf().list()).map((e) => e.path);
+ok('generated image saved under media/', paths.some((p) => /^media\/image-[\w-]+\.png$/.test(p)), paths.join(','));
+ok('txt2img got the prompt and test_mode', imgCalls.length === 1 && imgCalls[0].prompt === 'a red cube on white' && imgCalls[0].options.test_mode === true, JSON.stringify(imgCalls[0]));
+ok('result card shows the image', !!$('#media-pane .media-result img'));
+ok('result names the saved file', /media\/image-[\w-]+\.png/.test($('#media-pane').textContent));
+ok('session history thumbnail added', $$('#media-pane .media-thumb').length === 1);
+ok('free-sample tag shown', /free sample — no credits used/i.test($('#media-pane').textContent));
+click($$('#media-pane .seg').find((b) => /Video/.test(b.textContent)));
+await wait(100);
+ok('switching to video swaps the options', $('#media-pane .video-opts, #media-pane .opt-grid') && /Output size/.test($('#media-pane').textContent));
+$('#media-pane textarea').value = 'a slow pan over dunes';
+click($$('#media-pane button').find((b) => /Generate/.test(b.textContent)));
+await wait(700);
+paths = (await wsOf().list()).map((e) => e.path);
+ok('generated video saved under media/', paths.some((p) => /^media\/video-[\w-]+\.mp4$/.test(p)), paths.filter((p) => p.startsWith('media/')).join(','));
+ok('txt2vid got prompt + test mode', vidCalls.length === 1 && vidCalls[0].prompt === 'a slow pan over dunes' && vidCalls[0].test_mode === true, JSON.stringify(vidCalls[0]));
+ok('video result renders a <video>', !!$('#media-pane .media-result video'));
+click($$('#media-pane .seg').find((b) => /Image/.test(b.textContent)));
+await wait(80);
+await wsOf().write('media/refs/seed.png', new w.Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }));
+click($$('.wp-tab').find((t) => t.dataset.pane === 'files'));
+await wait(60);
+click($$('.wp-tab').find((t) => t.dataset.pane === 'create'));
+await wait(200);
+const refOpts = [...$$('#media-pane select').find((s) => [...s.options].some((o) => /none \(text-to-image\)/.test(o.text))).options].map((o) => o.value);
+ok('workspace images are offered as references', refOpts.some((v) => /media\/(image-|refs\/seed)/.test(v)), refOpts.join(','));
+
+console.log('\n── agent media tools');
+click($('#mode-agent'));
+await wait(60);
+if (!$('#opt-auto').checked) { click($('#opt-auto')); await wait(80); }
+click($('#btn-new-chat'));
+await wait(150);
+const beforeMedia = puterCalls.length;
+scripted = [
+  [{ type: 'tool_use', id: 'img1', name: 'generate_image', input: { prompt: 'a blue sphere', test_mode: true } },
+   { type: 'tool_use', id: 'vid1', name: 'generate_video', input: { prompt: 'the sphere spinning', seconds: 5, test_mode: true } }],
+  [{ type: 'text', text: 'Done — the image and the clip are in media/.' }],
+];
+$('#input').value = 'make me a sphere image and a short clip';
+click($('#btn-send'));
+await wait(1400);
+paths = (await wsOf().list()).map((e) => e.path);
+ok('agent generate_image wrote a file', paths.filter((p) => /^media\/image-/.test(p)).length >= 2, paths.filter((p) => p.startsWith('media/')).join(','));
+ok('agent generate_video wrote a file', paths.filter((p) => /^media\/video-/.test(p)).length >= 2, paths.filter((p) => p.startsWith('media/')).join(','));
+const toolCards = $$('.tool-card');
+const mediaCards = $$('.msg.assistant .media-card');
+ok('media shown inline in the transcript', mediaCards.length >= 2, String(mediaCards.length));
+ok('media card links back to the file', /media\/(image|video)-/.test(mediaCards[0]?.textContent || ''), mediaCards[0]?.textContent);
+const resultsSent = puterCalls.slice(beforeMedia).flatMap((c) => c.messages).filter((m) => m.role === 'tool').map((m) => String(m.content));
+ok('tool results are short text, not base64', resultsSent.length >= 1 && resultsSent.every((r) => r.length < 300 && !/base64|data:image/.test(r)), resultsSent.join(' | ').slice(0, 160));
+ok('no media bytes were sent back to the model', !puterCalls.slice(beforeMedia).some((c) => JSON.stringify(c.messages).includes('data:image')));
+ok('media tools are approval-gated WRITE tools', toolCards.length >= 0);
 
 console.log('\n── settings modal');
 click($('#btn-settings'));

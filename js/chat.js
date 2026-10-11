@@ -2,7 +2,7 @@
  * Chat view: renders the transcript, streams tokens into Markdown, and shows
  * each agent tool call as an expandable card.
  */
-import { el, esc, formatTime, copyText, truncate } from './util.js';
+import { el, esc, formatTime, copyText, truncate, basename } from './util.js';
 import { renderMarkdownInto, mdToHtml } from './markdown.js';
 import { icon, toast } from './ui.js';
 import { shortModelName } from './llm.js';
@@ -15,13 +15,16 @@ export class ChatView {
    * @param {HTMLElement} o.messages   #messages container
    * @param {HTMLElement} o.scroll     scrollable parent
    * @param {HTMLElement} o.welcome    welcome screen element
-   * @param {object} o.handlers        {onRegenerate, onEditUser, onDelete, onSendText}
+   * @param {object} o.handlers        {onRegenerate, onEditUser, onDelete, onSendText, onMediaAdded}
+   * @param {Function}[o.getWs]        () => workspace, used to re-read generated media on reload
    */
   constructor(o) {
     this.messagesEl = o.messages;
     this.scrollEl = o.scroll;
     this.welcomeEl = o.welcome;
     this.handlers = o.handlers || {};
+    this.getWs = o.getWs;
+    this._objectUrls = [];
     this.nodes = new Map();     // message id -> DOM refs
     this.pinnedBottom = true;
     this._raf = null;
@@ -39,6 +42,8 @@ export class ChatView {
   }
 
   clear() {
+    for (const url of this._objectUrls) { try { URL.revokeObjectURL(url); } catch { /* ignore */ } }
+    this._objectUrls = [];
     this.messagesEl.innerHTML = '';
     this.nodes.clear();
   }
@@ -106,6 +111,11 @@ export class ChatView {
     col.append(toolBox);
     if (m.toolCalls?.length) this.renderToolCards(toolBox, m.toolCalls);
 
+    // generated images / videos
+    const mediaBox = el('div.media-row');
+    col.append(mediaBox);
+    for (const item of (m.media || [])) mediaBox.append(this.mediaCard(item));
+
     // actions
     const actions = el('div.msg-actions');
     const copyBtn = el('button', { title: 'Copy message' }, icon('copy'), el('span', { text: 'copy' }));
@@ -138,9 +148,76 @@ export class ChatView {
     if (text) renderMarkdownInto(md, text);
     else if (m.role !== 'tool') md.innerHTML = '';
 
-    this.nodes.set(m.id, { wrap, col, md, bubble, toolBox, head, reasoningBox, record: m, buffer: text });
+    this.nodes.set(m.id, { wrap, col, md, bubble, toolBox, mediaBox, head, reasoningBox, record: m, buffer: text });
     this.scrollToBottom();
     return this.nodes.get(m.id);
+  }
+
+  /**
+   * One generated image or video. The bytes are shown from `dataUrl` when we
+   * still have them; after a reload only the workspace path is stored, so the
+   * file is read back from the workspace and shown through an object URL.
+   */
+  mediaCard(item) {
+    const holder = el('div.media-holder');
+    const cap = el('figcaption.media-cap', {},
+      el('button.media-path', {
+        text: item.path || 'media',
+        title: 'Open in the Files tab',
+        onclick: () => this.handlers.onOpenFile?.(item.path),
+      }),
+      item.model ? el('span.dim', { text: ` · ${item.model}` }) : null,
+      item.testMode ? el('span.tag.free', { text: 'free sample' }) : null,
+    );
+
+    const paint = (url) => {
+      holder.replaceChildren(
+        item.kind === 'video'
+          ? el('video', { src: url, controls: true, playsinline: true, preload: 'metadata' })
+          : el('img', { src: url, alt: item.prompt || item.path || 'generated image', loading: 'lazy' }),
+        el('a.media-dl', { text: 'download', href: url, download: basename(item.path || 'media'), title: 'Download' }),
+      );
+    };
+
+    const direct = item.url || item.dataUrl;
+    if (direct) {
+      paint(direct);
+    } else if (item.path) {
+      holder.append(el('div.media-loading', { text: 'loading…' }));
+      (async () => {
+        try {
+          const raw = await this.getWs?.().read(item.path);
+          const blob = raw instanceof Blob ? raw : new Blob([raw ?? '']);
+          const url = URL.createObjectURL(blob);
+          this._objectUrls.push(url);
+          paint(url);
+        } catch {
+          holder.replaceChildren(el('div.media-missing', { text: `not in the workspace any more: ${item.path}` }));
+        }
+      })();
+    }
+
+    return el('figure.media-card', {}, holder, cap);
+  }
+
+  /**
+   * Attach freshly generated media to the newest assistant message and show it.
+   * Only the path is persisted — never the base64 — so history stays small.
+   */
+  showMedia(conv, media) {
+    if (!conv || !media?.path) return;
+    const host = [...(conv.messages || [])].reverse().find((m) => m.role === 'assistant');
+    if (!host) return;
+    host.media = [...(host.media || []), {
+      kind: media.kind, path: media.path, model: media.model, prompt: media.prompt, testMode: media.testMode,
+    }];
+    const refs = this.nodes.get(host.id);
+    if (refs) {
+      if (!refs.mediaBox) { refs.mediaBox = el('div.media-row'); refs.col.append(refs.mediaBox); }
+      refs.mediaBox.append(this.mediaCard({ ...media }));
+      this.scrollToBottom();
+    }
+    this.handlers.onMediaAdded?.(host);
   }
 
   metaText(m) {

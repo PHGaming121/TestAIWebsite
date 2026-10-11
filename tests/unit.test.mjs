@@ -30,7 +30,7 @@ global.cancelAnimationFrame = (id) => clearTimeout(id);
 global.indexedDB = undefined;
 
 // load the vendored library bundle (marked / DOMPurify / hljs / JSZip)
-await import('/tmp/bundle/vendor.bundle.js');
+await import(`${REPO_ROOT}/assets/vendor/vendor.bundle.js`);
 
 const ROOT = `${REPO_ROOT}/js`;
 const { createWorkspace, workspace, setWorkspace } = await import(`${ROOT}/workspace.js`);
@@ -248,6 +248,77 @@ const modelMsg = explainAiError(new Error('model not found: foo/bar-9'), { model
 ok('unknown model suggests the picker', /model picker|Ctrl/i.test(modelMsg), modelMsg);
 ok('unrelated errors are left alone', explainAiError(new Error('socket hang up')) === null);
 ok('non-Error values are handled', typeof explainAiError({ message: 'quota exceeded' }) === 'string');
+
+/* ══════ media generation ══════ */
+const mediaCalls = { img: [], vid: [] };
+const PNG_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+w.puter = {
+  ai: {
+    async chat() { return {}; },
+    async txt2img(prompt, options) { mediaCalls.img.push({ prompt, options }); const i = w.document.createElement('img'); i.src = PNG_URI; return i; },
+    async txt2vid(options) { mediaCalls.vid.push(options); const v = w.document.createElement('video'); v.src = 'data:video/mp4;base64,AAAAHGZ0eXBpc29t'; return v; },
+  },
+};
+const M = await import(`${ROOT}/media.js`);
+
+section('media: result normalisation');
+ok('extForMime images', M.extForMime('image/png') === 'png' && M.extForMime('image/webp') === 'webp');
+ok('extForMime video', M.extForMime('video/mp4') === 'mp4' && M.extForMime('video/webm') === 'webm');
+ok('extForMime falls back', M.extForMime('', 'png') === 'png' && M.extForMime('application/zip', 'bin') === 'bin');
+const blobCase = await M.toMediaBlob(new w.Blob(['hello'], { type: 'image/png' }));
+ok('accepts a Blob', blobCase.blob.size === 5 && blobCase.mime === 'image/png');
+const dataCase = await M.toMediaBlob(PNG_URI);
+ok('accepts a data URI', dataCase.blob.size > 20 && dataCase.mime === 'image/png', String(dataCase.blob.size));
+const objCase = await M.toMediaBlob({ src: 'data:text/plain;base64,aGk=' });
+ok('digs a src out of an object', (await objCase.blob.text()) === 'hi');
+const elCase = await M.toMediaBlob((() => { const i = w.document.createElement('img'); i.src = PNG_URI; return i; })());
+ok('accepts an HTMLImageElement (what txt2img really returns)', elCase.blob.size > 20 && elCase.mime === 'image/png');
+const vidElCase = await M.toMediaBlob((() => { const v = w.document.createElement('video'); v.src = 'data:video/mp4;base64,AAAAHGZ0eXBpc29t'; return v; })());
+ok('accepts an HTMLVideoElement (what txt2vid really returns)', vidElCase.mime === 'video/mp4');
+const resCase = await M.toMediaBlob({ status: 200, ok: true, blob: async () => new w.Blob(['vid'], { type: 'video/webm' }) });
+ok('accepts a Response-like', resCase.mime === 'video/webm');
+let threw = false;
+try { await M.toMediaBlob(null); } catch { threw = true; }
+ok('rejects an empty result', threw);
+
+section('media: generateImage');
+threw = false;
+try { await M.generateImage({ prompt: '   ' }); } catch { threw = true; }
+ok('requires a prompt', threw);
+const img1 = await M.generateImage({
+  prompt: 'a red cube', model: 'gpt-image-2', provider: 'openai', quality: 'high',
+  aspectRatio: '16:9', negativePrompt: 'blur', seed: 7, steps: 20,
+});
+const io = mediaCalls.img.at(-1).options;
+ok('maps model/provider/quality', io.model === 'gpt-image-2' && io.provider === 'openai' && io.quality === 'high');
+ok('maps aspect ratio to both spellings', io.aspect_ratio === '16:9' && io.ratio?.w === 16 && io.ratio?.h === 9, JSON.stringify(io.ratio));
+ok('maps negative prompt / seed / steps', io.negative_prompt === 'blur' && io.seed === 7 && io.steps === 20);
+ok('always sends the prompt in the options too', io.prompt === 'a red cube');
+ok('returns bytes + an object URL for display', img1.blob.size > 20 && img1.ext === 'png' && (img1.url === '' || img1.url.startsWith('blob:')), img1.url);
+ok('no eager base64 of the media (keeps context and memory small)', img1.dataUrl === undefined);
+ok('no test_mode unless asked', io.test_mode === undefined);
+await M.generateImage({ prompt: 'x', testMode: true });
+ok('test mode is passed through (credit-free sample)', mediaCalls.img.at(-1).options.test_mode === true);
+await M.generateImage({ prompt: 'x', referenceImage: PNG_URI, strength: 0.6 });
+const refOpts = mediaCalls.img.at(-1).options;
+ok('image-to-image reference is mapped', refOpts.input_image === PNG_URI && refOpts.input_image_mime_type === 'image/png' && refOpts.strength === 0.6);
+
+section('media: generateVideo');
+await M.generateVideo({ prompt: 'dunes at dawn', seconds: 5, size: '720p', generateAudio: true, fps: 24, negativePrompt: 'text' });
+const vo = mediaCalls.vid.at(-1);
+ok('video prompt + duration + size', vo.prompt === 'dunes at dawn' && vo.seconds === 5 && vo.size === '720p');
+ok('video audio / fps / negative prompt', vo.generate_audio === true && vo.fps === 24 && vo.negative_prompt === 'text');
+ok('no model means the driver default', vo.model === undefined);
+await M.generateVideo({ prompt: 'x', model: 'seedance-2-5', firstFrame: PNG_URI, lastFrame: PNG_URI, referenceImages: [PNG_URI], testMode: true });
+const vo2 = mediaCalls.vid.at(-1);
+ok('image-to-video frames mapped', vo2.input_reference === PNG_URI && vo2.last_frame === PNG_URI && vo2.reference_images?.length === 1);
+ok('video model + test mode', vo2.model === 'seedance-2-5' && vo2.test_mode === true);
+const noVid = w.puter.ai.txt2vid;
+delete w.puter.ai.txt2vid;
+threw = false;
+try { await M.generateVideo({ prompt: 'x' }); } catch (e) { threw = /txt2vid/.test(e.message); }
+w.puter.ai.txt2vid = noVid;
+ok('clear error when the driver is missing', threw);
 
 console.log(`\n═══ ${pass} passed, ${fail} failed ═══`);
 process.exit(fail ? 1 : 0);

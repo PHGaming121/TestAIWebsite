@@ -123,6 +123,8 @@ const MIME = {
 export const mimeFor = (p) => MIME[extname(p)] || 'application/octet-stream';
 
 export const isImagePath = (p) => ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'avif'].includes(extname(p));
+export const isVideoPath = (p) => ['mp4', 'webm', 'mov', 'mkv', 'm4v', 'avi'].includes(extname(p));
+export const isAudioPath = (p) => ['mp3', 'wav', 'ogg', 'opus', 'm4a', 'flac', 'aac', 'weba'].includes(extname(p));
 export const isBinaryPath = (p) => !isTextPath(p) && !isImagePath(p);
 
 /** highlight.js language id for a path */

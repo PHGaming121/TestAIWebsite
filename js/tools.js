@@ -455,21 +455,81 @@ const puterTools = [
     }),
 
   tool('generate_image',
-    'Generate an image with a free Puter AI image model and save it into the workspace.',
+    `Generate an image with Puter's image models and save it into the workspace. Supports image-to-image editing (reference_image), aspect ratios, quality tiers and a credit-free test_mode.`,
     obj({
-      prompt: str('What to draw.'),
-      path: str('Where to save it, e.g. "assets/hero.png" (default: generated/<n>.png).'),
-      model: str('Optional image model, e.g. "gpt-image-1", "gemini-2.0-flash-preview-image-generation", "@cf/black-forest-labs/flux-1-schnell".'),
+      prompt: str('What to draw. Detailed, concrete prompts work best.'),
+      path: str('Where to save it, e.g. "assets/hero.png" (default: media/image-<n>.png).'),
+      model: str('Optional model id, e.g. "gpt-image-2", "gemini-3.1-flash-image", "grok-imagine-image-2.0", "@cf/black-forest-labs/flux-1-schnell".'),
+      provider: str('Optional provider: openai | gemini | xai | cloudflare | replicate | together | byteplus.'),
+      quality: str('Optional quality: low | medium | high | auto (OpenAI), or a size tier 512 | 1K | 2K | 4K (Gemini).'),
+      aspect_ratio: str('Optional aspect ratio such as "1:1", "16:9", "9:16".'),
+      width: num('Optional output width in pixels (with height).'),
+      height: num('Optional output height in pixels (with width).'),
+      negative_prompt: str('Optional: what to keep out of the image.'),
+      reference_image: str('Optional workspace path of an existing image to edit or condition on (image-to-image).'),
+      test_mode: bool('Return a free sample WITHOUT spending any credits. Use it to check a prompt first.'),
     }, ['prompt']),
     APPROVAL.WRITE,
     async (ctx, args) => {
-      const { ensurePuter } = await import('./llm.js');
-      const puter = await ensurePuter();
-      const blob = await puter.ai.txt2img(String(args.prompt), args.model ? { model: args.model } : undefined);
-      const path = normPath(args.path || `generated/image-${Date.now().toString(36)}.png`);
-      await ctx.ws.write(path, blob instanceof Blob ? blob : new Blob([blob], { type: 'image/png' }));
+      const { generateImage, workspaceFileToDataUrl } = await import('./media.js');
+      const refPath = args.reference_image ? normPath(String(args.reference_image)) : '';
+      const referenceImage = refPath ? await workspaceFileToDataUrl(ctx.ws, refPath) : undefined;
+      ctx.onOutput?.('info', `Generating image${args.test_mode ? ' (free test sample)' : ''}…`);
+      const media = await generateImage({
+        prompt: args.prompt, model: args.model, provider: args.provider, quality: args.quality,
+        aspectRatio: args.aspect_ratio, width: args.width, height: args.height,
+        negativePrompt: args.negative_prompt, referenceImage, testMode: !!args.test_mode,
+      });
+      const path = normPath(args.path || `media/image-${Date.now().toString(36)}.${media.ext}`);
+      await ctx.ws.write(path, media.blob);
       ctx.touch?.(path);
-      return `Generated image saved to ${path} (${formatBytes(blob?.size || 0)})`;
+      ctx.onMedia?.({
+        kind: 'image', path, url: media.url, model: media.model,
+        prompt: String(args.prompt).slice(0, 200), testMode: media.testMode,
+      });
+      return `Generated ${media.testMode ? 'test-sample ' : ''}image → ${path} (${formatBytes(media.blob.size)}, model: ${media.model})`;
+    }),
+
+  tool('generate_video',
+    `Generate a short video clip with Puter's video models (Together/Wan, BytePlus/Seedance) and save it into the workspace. Can be conditioned on a first frame, a last frame and reference images. This is slow — a clip can take a minute or two.`,
+    obj({
+      prompt: str('What should happen in the clip. Describe subject, motion, camera and style.'),
+      path: str('Where to save it, e.g. "media/clip.mp4" (default: media/video-<n>.mp4).'),
+      model: str('Optional model id, e.g. "togetherai:wan-ai/wan2.7-t2v", "seedance-2-5".'),
+      provider: str('Optional driver: together-video-generation | byteplus-video-generation.'),
+      seconds: num('Optional clip length in seconds; unsupported values fall back to the model default.'),
+      size: str('Optional output size as "1280x720", or a tier such as "720p" (Seedance, Wan 2.7).'),
+      first_frame: str('Optional workspace path of an image to use as the first frame (image-to-video).'),
+      last_frame: str('Optional workspace path of an image to use as the last frame.'),
+      reference_images: { type: 'array', items: { type: 'string' }, description: 'Optional workspace paths of subject/style reference images (Seedance: up to 9 on 2.0, 30 on 2.5).' },
+      negative_prompt: str('Optional: what to keep out of the clip.'),
+      generate_audio: bool('Optional: generate a soundtrack on models that support audio (Seedance).'),
+      fps: num('Optional frames per second (Together models).'),
+      test_mode: bool('Return a free sample clip WITHOUT spending credits.'),
+    }, ['prompt']),
+    APPROVAL.WRITE,
+    async (ctx, args) => {
+      const { generateVideo, workspaceFileToDataUrl } = await import('./media.js');
+      const toRef = async (p) => (p ? await workspaceFileToDataUrl(ctx.ws, normPath(String(p))) : undefined);
+      const refs = Array.isArray(args.reference_images) && args.reference_images.length
+        ? await Promise.all(args.reference_images.map(toRef))
+        : undefined;
+      ctx.onOutput?.('info', `Generating video${args.test_mode ? ' (free test sample)' : ''} — this can take a minute or two…`);
+      ctx.onProgress?.(0.15, 'generating video…');
+      const media = await generateVideo({
+        prompt: args.prompt, model: args.model, provider: args.provider, seconds: args.seconds, size: args.size,
+        firstFrame: await toRef(args.first_frame), lastFrame: await toRef(args.last_frame), referenceImages: refs,
+        negativePrompt: args.negative_prompt, generateAudio: args.generate_audio, fps: args.fps,
+        testMode: !!args.test_mode,
+      });
+      const path = normPath(args.path || `media/video-${Date.now().toString(36)}.${media.ext}`);
+      await ctx.ws.write(path, media.blob);
+      ctx.touch?.(path);
+      ctx.onMedia?.({
+        kind: 'video', path, url: media.url, model: media.model, seconds: media.seconds,
+        prompt: String(args.prompt).slice(0, 200), testMode: media.testMode,
+      });
+      return `Generated ${media.testMode ? 'test-sample ' : ''}video → ${path} (${formatBytes(media.blob.size)}, model: ${media.model}${media.seconds ? `, ${media.seconds}s` : ''})`;
     }),
 
   tool('ask_user',
