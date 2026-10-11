@@ -18,6 +18,7 @@ import { GitHubPane } from './github-pane.js';
 import { PublishPane } from './publish-pane.js';
 import { MediaPane } from './media-pane.js';
 import { MemoryPane } from './memory-pane.js';
+import { ConnectionsPane } from './connections-pane.js';
 import { ModelPicker } from './modelpicker.js';
 import { openSettings } from './settings.js';
 import { icon, toast, openModal, confirmDialog, promptDialog, approvalDialog, askUserDialog } from './ui.js';
@@ -119,6 +120,13 @@ async function boot() {
     updateSettings,
     activeConv: () => activeConversation(),
     complete: (messages, opts) => llmComplete(messages, opts),
+  });
+
+  app.connPane = new ConnectionsPane({
+    container: $('#connect-pane'),
+    getSettings: () => state.settings,
+    updateSettings,
+    onModelsChanged: () => app.picker?.load({ force: true }),
   });
 
   app.pubPane = new PublishPane({
@@ -315,6 +323,7 @@ function switchTab(name) {
   if (name === 'files') app.filesPane.refresh();
   if (name === 'create') app.mediaPane?.loadRefs();
   if (name === 'memory') app.memPane?.refresh();
+  if (name === 'connect') app.connPane?.refresh();
   if (name === 'github') app.ghPane.renderSide();
 }
 

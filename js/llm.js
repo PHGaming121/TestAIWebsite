@@ -92,7 +92,7 @@ export function extractToolCalls(message) {
 }
 
 /* ── streaming accumulator ──────────────────────────────── */
-class ToolCallAccumulator {
+export class ToolCallAccumulator {
   constructor() { this.map = new Map(); this.order = []; }
   touch(id) {
     if (!this.map.has(id)) { this.map.set(id, { id, name: '', argsText: '', args: null }); this.order.push(id); }
@@ -110,6 +110,24 @@ class ToolCallAccumulator {
       if (typeof raw === 'string') entry.argsText += raw;
       else entry.args = raw; // already parsed by the SDK
     }
+  }
+  /**
+   * OpenAI-style streaming deltas: the id and name may arrive on the first
+   * fragment only, and `function.arguments` comes in pieces keyed by index.
+   */
+  feedDelta(tc) {
+    if (!tc) return;
+    // Key on `index`, not `id`: OpenAI sends the id on the first fragment of a
+    // call only, so keying by id would split one call into several entries and
+    // lose every argument fragment after the first.
+    const hasIndex = tc.index !== undefined && tc.index !== null;
+    const key = hasIndex ? `#idx${tc.index}` : (tc.id || `#auto${this.order.length}`);
+    const entry = this.touch(key);
+    if (tc.id) entry.id = tc.id;
+    if (tc.function?.name || tc.name) entry.name = tc.function?.name || tc.name;
+    const frag = tc.function?.arguments ?? tc.arguments ?? tc.input;
+    if (typeof frag === 'string') entry.argsText += frag;
+    else if (frag && typeof frag === 'object') entry.args = frag;
   }
   finish() {
     return this.order
@@ -178,7 +196,32 @@ function friendlierError(e, model) {
   return err;
 }
 
+/**
+ * Which provider serves this call. `null` means the built-in Puter path.
+ * Imported lazily so llm.js keeps no static dependency on providers/store.
+ */
+async function resolveProvider(o) {
+  if (o?.forcePuter) return null;
+  if (o?.providerCfg) return o.providerCfg;
+  const [{ activeProvider }, { state }] = await Promise.all([import('./providers.js'), import('./store.js')]);
+  return activeProvider(state.settings);
+}
+
 export async function chat(o) {
+  const cfg = await resolveProvider(o);
+  if (cfg) {
+    const { chatViaProvider, isProviderReady } = await import('./providers.js');
+    if (!isProviderReady(cfg)) {
+      throw new Error(`${cfg.label} is not configured yet — open the Connect tab and add ${cfg.def?.keyRequired ? 'your API key' : 'its endpoint URL'}.`);
+    }
+    try {
+      return await chatViaProvider(cfg, o);
+    } catch (e) {
+      const { explainProviderError } = await import('./providers.js');
+      throw new Error(explainProviderError(e, cfg, e?.status || 0));
+    }
+  }
+
   const puter = await ensurePuter();
   const {
     messages, model, tools, temperature, maxTokens, reasoningEffort,
@@ -330,7 +373,7 @@ export async function fetchLiveModels({ force = false, cacheTtl = 6 * 3600 * 100
   return { models, live: true, cached: false };
 }
 
-function normalizeModel(m) {
+export function normalizeModel(m) {
   if (!m) return null;
   if (typeof m === 'string') return { id: m, provider: guessProvider(m), label: m, desc: '', tags: [] };
   const id = m.id || m.model || m.slug || m.key || m.name;

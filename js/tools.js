@@ -16,6 +16,7 @@ export const APPROVAL = {
   EXEC: 'exec',
   GITHUB: 'github',
   PUBLISH: 'publish',
+  NETWORK: 'network',
 };
 
 const str = (description, extra = {}) => ({ type: 'string', description, ...extra });
@@ -600,6 +601,62 @@ const puterTools = [
       removeMemory(match.entry.id);
       ctx.onMemory?.();
       return `Forgot [${match.entry.kind}] ${match.entry.text}`;
+    }),
+
+  /* ═══ connections: other apps and the web ═══ */
+  tool('list_connections',
+    'List the external apps/APIs the user has connected (and the presets they could add). Use it before call_connection.',
+    obj({}),
+    APPROVAL.READ,
+    async () => {
+      const { listConnections, CONNECTION_PRESETS } = await import('./connections.js');
+      const conns = listConnections();
+      const lines = conns.length
+        ? conns.map((c) => `- ${c.name} (id: ${c.id}) → ${c.baseUrl || '(no URL)'} · auth: ${c.authType}${c.enabled === false ? ' · DISABLED' : ''}${c.description ? `\n  ${c.description}` : ''}`)
+        : ['No connections configured yet.'];
+      const missing = CONNECTION_PRESETS.filter((p) => !conns.some((c) => c.preset === p.id));
+      if (missing.length) lines.push('', `Presets the user can add in the Connect tab: ${missing.map((p) => p.name).join(', ')}`);
+      lines.push('', 'There is also web_fetch, which reads any public URL without a connection.');
+      return lines.join('\n');
+    }),
+
+  tool('call_connection',
+    'Call one of the user\'s connected apps/APIs. Use it to read or change data in a service they connected in the Connect tab (search, encyclopaedia, GitHub, a company API, a webhook, a smart-home hub…). Never invent a connection — check list_connections first.',
+    obj({
+      connection: str('Connection id or exact name from list_connections.'),
+      method: str('HTTP method: GET | POST | PUT | PATCH | DELETE. Default GET.'),
+      path: str('Path appended to the connection base URL, e.g. "/page/summary/Alan_Turing", or a full URL.'),
+      query: { type: 'object', description: 'Optional query parameters as key/value pairs.', additionalProperties: true },
+      body: { type: 'object', description: 'Optional JSON body for POST/PUT/PATCH.', additionalProperties: true },
+      headers: { type: 'object', description: 'Optional extra request headers.', additionalProperties: true },
+    }, ['connection']),
+    APPROVAL.NETWORK,
+    async (ctx, args) => {
+      const { callConnection, listConnections } = await import('./connections.js');
+      const wanted = String(args.connection || '').trim();
+      const conn = listConnections().find((c) => c.id === wanted || c.name.toLowerCase() === wanted.toLowerCase());
+      if (!conn) return `ERROR: no connection named "${wanted}". Run list_connections to see what is available.`;
+      const res = await callConnection(conn, {
+        method: args.method, path: args.path, query: args.query, body: args.body, headers: args.headers,
+        maxChars: ctx.settings?.maxToolOutputChars || 14000,
+      });
+      const head = `${res.ok ? 'OK' : 'FAILED'} ${res.status} ${res.method || args.method || 'GET'} ${res.url}${res.via === 'puter' ? ' (via Puter proxy — CORS blocked the direct call)' : ''}`;
+      if (!res.ok && !res.text) return `${head}\n(empty response body)`;
+      return `${head}\n\n${res.json ? JSON.stringify(res.json, null, 2) : res.text}`;
+    }),
+
+  tool('web_fetch',
+    'Fetch a public web page and read it as text — documentation, a changelog, an API reference, a blog post. HTML is reduced to readable Markdown-ish text. Use it instead of guessing at facts you can look up.',
+    obj({
+      url: str('Absolute http(s) URL to read.'),
+      max_chars: num('Optional cap on returned characters (default 14000).'),
+    }, ['url']),
+    APPROVAL.NETWORK,
+    async (ctx, args) => {
+      const { webFetch } = await import('./connections.js');
+      const res = await webFetch(String(args.url), { maxChars: args.max_chars || ctx.settings?.maxToolOutputChars || 14000 });
+      const head = `${res.ok ? 'OK' : 'FAILED'} ${res.status} ${res.url}${res.title ? ` — ${res.title}` : ''}${res.via === 'puter' ? ' (via Puter proxy)' : ''}`;
+      return `${head}\n\n${res.text}`;
     }),
 
   tool('ask_user',

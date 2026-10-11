@@ -437,5 +437,166 @@ ok('stem matching links related words', MEM.bestMatch('shipping the site')?.entr
 ok('stem matching links deploy → deployment', (MEM.clearMemories(), MEM.addMemory({ text: 'The user deploys to GitHub Pages only.', kind: 'decision' }), MEM.bestMatch('deployment target')?.entry.text.includes('deploys') === true));
 
 
+
+/* ══════ connections & providers ══════ */
+const CN = await import(`${ROOT}/connections.js`);
+const PR = await import(`${ROOT}/providers.js`);
+w.puter.net = {
+  fetch: async (url, init) => {
+    netLog.push({ url, init, via: 'puter' });
+    return new Response(JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: 'Answered through the Puter proxy.' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 2 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  },
+};
+const netLog = [];
+let fetchLog = [];
+let fetchImpl = null;
+globalThis.fetch = async (url, init) => {
+  fetchLog.push({ url: String(url), init });
+  if (fetchImpl) return await fetchImpl(url, init);
+  return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+};
+
+section('providers: registry + config');
+ok('Puter is the default first entry', PR.PROVIDERS[0].id === 'puter' && PR.PROVIDERS[0].keyless);
+ok('a custom endpoint provider exists', PR.PROVIDERS.some((p) => p.id === 'custom' && p.userBaseUrl));
+ok('local providers are marked loopback', PR.providerById('ollama').loopback === true && PR.providerById('lmstudio').loopback === true);
+ok('keyless providers need no key', PR.isProviderReady(PR.providerConfig('ollama')) === true && PR.isProviderReady(PR.providerConfig('pollinations')) === true);
+ok('key providers are not ready without a key', PR.isProviderReady(PR.providerConfig('openrouter')) === false);
+PR.saveProviderConfig('openrouter', { apiKey: 'sk-or-test', model: 'openrouter/free' });
+ok('saving a key makes it ready', PR.isProviderReady(PR.providerConfig('openrouter')) === true);
+ok('config is persisted', JSON.parse(w.localStorage.getItem('pp.providers.v1')).openrouter.apiKey === 'sk-or-test');
+ok('custom provider needs a URL', PR.isProviderReady(PR.providerConfig('custom')) === false);
+PR.saveProviderConfig('custom', { baseUrl: 'https://api.test/v1/', apiKey: 'k' });
+ok('trailing slashes are trimmed', PR.providerConfig('custom').baseUrl === 'https://api.test/v1');
+ok('activeProvider(null settings) means Puter', PR.activeProvider({}) === null && PR.activeProvider({ providerId: 'puter' }) === null);
+ok('activeProvider returns the chosen config', PR.activeProvider({ providerId: 'custom' }).baseUrl === 'https://api.test/v1');
+PR.saveProviderConfig('openrouter', { apiKey: '' });
+ok('an empty key is dropped', PR.providerConfig('openrouter').apiKey === '');
+ok('joinUrl avoids double slashes', PR.joinUrl('https://a.b/v1/', '/chat') === 'https://a.b/v1/chat');
+ok('loopback detection', PR.isLoopbackUrl('http://localhost:11434/v1') && PR.isLoopbackUrl('http://127.0.0.1:8080') && PR.isLoopbackUrl('http://192.168.1.20:1234/v1') && !PR.isLoopbackUrl('https://api.openai.com/v1'));
+ok('401 is explained as a key problem', /API key/.test(PR.explainProviderError('unauthorized', PR.providerConfig('custom'), 401)));
+ok('404 is explained as a model/path problem', /model or path/.test(PR.explainProviderError('no such model', PR.providerConfig('custom'), 404)));
+ok('429 is explained as rate limit or credit', /rate-limited|credit/.test(PR.explainProviderError('too many requests', PR.providerConfig('custom'), 429)));
+ok('500 is explained as their server', /server error/.test(PR.explainProviderError('boom', PR.providerConfig('custom'), 503)));
+
+section('providers: OpenAI-compatible chat');
+const cfg = PR.providerConfig('custom');
+function sseResponse(lines) {
+  const enc = new TextEncoder();
+  const body = new ReadableStream({
+    start(c) { for (const l of lines) c.enqueue(enc.encode(l)); c.close(); },
+  });
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+fetchImpl = async () => sseResponse([
+  'data: {"choices":[{"delta":{"role":"assistant","content":"Hello"}}]}\n\n',
+  'data: {"choices":[{"delta":{"content":" world","reasoning_content":"(thinking)"}}]}\n\n',
+  'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"write_file","arguments":"{\\"path\\""}}]}}]}\n\n',
+  'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\\"a.txt\\",\\"content\\":\\"hi\\"}"}}]}}],"usage":{"prompt_tokens":5,"completion_tokens":9}}\n\n',
+  'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+  'data: [DONE]\n\n',
+]);
+fetchLog = [];
+const streamed = await PR.chatViaProvider(cfg, { model: 'test-model', messages: [{ role: 'user', content: 'hi' }], stream: true, tools: [{ type: 'function', function: { name: 'write_file' } }] });
+ok('streams text from SSE deltas', streamed.text === 'Hello world', streamed.text);
+ok('captures reasoning_content', streamed.reasoning === '(thinking)', streamed.reasoning);
+ok('reassembles a tool call split across chunks', streamed.toolCalls.length === 1 && streamed.toolCalls[0].name === 'write_file' && streamed.toolCalls[0].args.path === 'a.txt', JSON.stringify(streamed.toolCalls));
+ok('captures usage from the stream', streamed.usage?.completion_tokens === 9);
+ok('reports the finish reason', streamed.finishReason === 'tool_calls');
+ok('went direct, not through the proxy', streamed.via === 'direct' && streamed.streamed === true);
+const sent = JSON.parse(fetchLog[0].init.body);
+ok('sends an OpenAI-shaped request', fetchLog[0].url === 'https://api.test/v1/chat/completions' && sent.model === 'test-model' && sent.stream === true && sent.tool_choice === 'auto');
+ok('sends the stored bearer key', fetchLog[0].init.headers.Authorization === 'Bearer k');
+fetchImpl = async () => new Response(JSON.stringify({
+  choices: [{ message: { role: 'assistant', content: 'All done.', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'finish', arguments: '{"summary":"done"}' } }] }, finish_reason: 'tool_calls' }],
+  usage: { prompt_tokens: 3, completion_tokens: 4 },
+}), { status: 200, headers: { 'content-type': 'application/json' } });
+const plain = await PR.chatViaProvider(cfg, { model: 'test-model', messages: [{ role: 'user', content: 'hi' }], stream: false });
+ok('parses a non-streaming completion', plain.text === 'All done.' && plain.finishReason === 'tool_calls');
+ok('parses non-streaming tool arguments', plain.toolCalls[0].args.summary === 'done');
+fetchImpl = async () => new Response(JSON.stringify({ error: { message: 'Incorrect API key provided' } }), { status: 401 });
+let perr = '';
+try { await PR.chatViaProvider(cfg, { model: 'm', messages: [], stream: false }); } catch (e) { perr = e.message; }
+ok('a 401 becomes an actionable message', /API key/.test(perr), perr);
+fetchImpl = async () => { const e = new TypeError('Failed to fetch'); throw e; };
+const proxied = await PR.chatViaProvider(cfg, { model: 'test-model', messages: [{ role: 'user', content: 'hi' }], stream: true });
+ok('CORS failure falls back to the Puter proxy', proxied.via === 'puter' && proxied.streamed === false && /Puter proxy/.test(proxied.text), JSON.stringify(proxied).slice(0, 120));
+ok('the proxied retry asks for a single completion, not a stream', JSON.parse(netLog.at(-1).init.body).stream === false, netLog.at(-1).init.body);
+fetchImpl = async (url) => {
+  if (/\/models$/.test(String(url))) return new Response(JSON.stringify({ data: [{ id: 'test-model', object: 'model' }, { id: 'other-model' }] }), { status: 200 });
+  return new Response('{}', { status: 200 });
+};
+const models = await PR.listProviderModels(cfg);
+ok('lists provider models', models.length === 2 && models[0].id === 'test-model', JSON.stringify(models));
+const probe = await PR.testProvider(cfg);
+ok('testProvider reports reachability', probe.ok === true && probe.models === 2);
+fetchImpl = null;
+
+section('connections: apps the agent can call');
+ok('presets include keyless search and Wikipedia', CN.CONNECTION_PRESETS.some((p) => p.id === 'duckduckgo') && CN.CONNECTION_PRESETS.some((p) => p.id === 'wikipedia'));
+const ddg = CN.addPreset('duckduckgo');
+ok('adding a preset stores it', CN.listConnections().some((c) => c.id === ddg.id) && JSON.parse(w.localStorage.getItem('pp.connections.v1')).length === 1);
+ok('adding the same preset twice does not duplicate', CN.addPreset('duckduckgo').id === ddg.id && CN.listConnections().length === 1);
+ok('buildUrl joins path and query', CN.buildUrl(ddg, { path: '/', query: { q: 'putter js', format: 'json' } }) === 'https://api.duckduckgo.com/?q=putter+js&format=json', CN.buildUrl(ddg, { path: '/', query: { q: 'putter js', format: 'json' } }));
+ok('buildUrl accepts an absolute URL', CN.buildUrl(ddg, { path: 'https://other.example/x' }) === 'https://other.example/x');
+fetchLog = [];
+fetchImpl = async () => new Response('{"AbstractText":"Puter is a cloud OS."}', { status: 200, headers: { 'content-type': 'application/json' } });
+const called = await CN.callConnection(ddg, { path: '/', query: { q: 'puter', format: 'json' } });
+ok('callConnection performs the request', called.ok && called.status === 200 && called.json.AbstractText.includes('Puter'));
+ok('callConnection reports the URL it used', called.url.includes('q=puter'), called.url);
+const bearer = CN.saveConnection({ name: 'Bearer API', baseUrl: 'https://api.example.com', authType: 'bearer', apiKey: 'sekret' });
+fetchLog = [];
+await CN.callConnection(bearer, { path: '/v1/things' });
+ok('bearer auth header is applied', fetchLog[0].init.headers.Authorization === 'Bearer sekret');
+const headerAuth = CN.saveConnection({ name: 'Header API', baseUrl: 'https://api.example.com', authType: 'header', headerName: 'X-Api-Key', apiKey: 'abc' });
+fetchLog = [];
+await CN.callConnection(headerAuth, {});
+ok('custom header auth is applied', fetchLog[0].init.headers['X-Api-Key'] === 'abc' && !fetchLog[0].init.headers.Authorization);
+const basic = CN.saveConnection({ name: 'Basic API', baseUrl: 'https://api.example.com', authType: 'basic', apiKey: 'user:pass' });
+fetchLog = [];
+await CN.callConnection(basic, {});
+ok('basic auth is base64 encoded', fetchLog[0].init.headers.Authorization === `Basic ${Buffer.from('user:pass').toString('base64')}`);
+const gh = CN.saveConnection({ name: 'GitHub via token', baseUrl: 'https://api.github.com', authType: 'github' });
+fetchLog = [];
+let ghErr = '';
+try { await CN.callConnection(gh, { path: '/user' }); } catch (e) { ghErr = e.message; }
+ok('github auth needs the GitHub tab token', /GitHub token/.test(ghErr), ghErr);
+const disabled = CN.saveConnection({ name: 'Off', baseUrl: 'https://api.example.com', enabled: false });
+let disErr = '';
+try { await CN.callConnection(disabled, {}); } catch (e) { disErr = e.message; }
+ok('disabled connections refuse to run', /disabled/.test(disErr));
+let noConn = '';
+try { await CN.callConnection('conn_missing', {}); } catch (e) { noConn = e.message; }
+ok('unknown connection id is reported', /No such connection/.test(noConn));
+fetchImpl = async () => new Response('{"a":1}', { status: 200 });
+ok('removeConnection deletes it', CN.removeConnection(bearer.id) === true && CN.getConnection(bearer.id) === null && CN.removeConnection('nope') === false);
+fetchImpl = null;
+
+section('connections: web_fetch');
+let werr = '';
+try { await CN.webFetch('http://localhost:8080/secret'); } catch (e) { werr = e.message; }
+ok('refuses loopback addresses', /loopback|private/i.test(werr), werr);
+werr = '';
+try { await CN.webFetch('notaurl'); } catch (e) { werr = e.message; }
+ok('refuses a non-URL', /absolute http/.test(werr));
+fetchImpl = async () => new Response(`<html><head><title>Docs</title><script>var s=1;</script><style>.a{}</style></head><body><nav>menu</nav><h1>Install</h1><p>Run <code>npm i</code>.</p><ul><li>one</li><li>two</li></ul></body></html>`, { status: 200, headers: { 'content-type': 'text/html' } });
+const page = await CN.webFetch('https://docs.example.com/guide');
+ok('extracts the title', page.title === 'Docs', page.title);
+ok('strips script, style and nav', !/var s=1|menu|\.a\{\}/.test(page.text), page.text.slice(0, 120));
+ok('keeps headings, code and list items', /## Install/.test(page.text) && /npm i/.test(page.text) && /- one/.test(page.text), page.text.slice(0, 160));
+ok('reports ok + status', page.ok === true && page.status === 200);
+const big = await CN.webFetch('https://docs.example.com/guide', { maxChars: 40 });
+ok('truncates to the budget', big.text.length <= 60 && big.truncated === true);
+fetchImpl = async () => new Response('{"plain":"json"}', { status: 200, headers: { 'content-type': 'application/json' } });
+const json = await CN.webFetch('https://api.example.com/x');
+ok('JSON bodies pass through untouched', json.text.includes('"plain"'));
+ok('htmlToText unescapes entities', CN.htmlToText('<p>a &amp; b &lt;c&gt;</p>').includes('a & b <c>'));
+fetchImpl = null;
+CN.listConnections().slice().forEach((c) => CN.removeConnection(c.id));
+
+
 console.log(`\n═══ ${pass} passed, ${fail} failed ═══`);
 process.exit(fail ? 1 : 0);

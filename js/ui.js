@@ -144,7 +144,13 @@ export function promptDialog({ title = 'Enter a value', label = '', value = '', 
 /** Tool-approval gate shown before a write/exec/publish tool runs. */
 export function approvalDialog(call) {
   return new Promise((resolve) => {
-    const tierLabel = { write: 'modify your workspace', exec: 'execute code', github: 'talk to GitHub', publish: 'publish your project' }[call.approval] || 'perform an action';
+    const tierLabel = {
+      write: 'modify your workspace',
+      exec: 'execute code',
+      github: 'talk to GitHub',
+      publish: 'publish your project',
+      network: 'call an external service you connected',
+    }[call.approval] || 'perform an action';
     const argText = JSON.stringify(call.args ?? {}, null, 2);
     const remember = el('input', { type: 'checkbox' });
     const body = el('div', {},

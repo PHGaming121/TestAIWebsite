@@ -544,6 +544,143 @@ ok('user was told about the downgrade', /text protocol|rejected native/i.test($(
 ok('no tool role leaked into a tools-less request', !puterCalls.slice(before).filter((c) => !c.options.tools).some((c) => c.messages.some((m) => m.role === 'tool')));
 rejectToolsOnce = false;
 
+console.log('\n── connect pane: providers');
+const PR = await import(`${REPO_ROOT}/js/providers.js`);
+const CN = await import(`${REPO_ROOT}/js/connections.js`);
+click($$('.wp-tab').find((t) => t.dataset.pane === 'connect'));
+await wait(200);
+ok('connect pane rendered', /Which AI answers/.test($('#connect-pane').textContent));
+const provSel = $('#connect-pane select');
+ok('provider list includes Puter, local and key options', [...provSel.options].map((o) => o.value).join(',').includes('puter,ollama') && [...provSel.options].some((o) => o.value === 'openrouter'));
+ok('Puter needs no key', /no key and no backend/i.test($('#connect-pane').textContent));
+ok('Ollama preset explains the origin env var', (provSel.value = 'ollama', provSel.dispatchEvent(new w.Event('change', { bubbles: true })), /OLLAMA_ORIGINS/.test($('#connect-pane').textContent)));
+provSel.value = 'openrouter';
+provSel.dispatchEvent(new w.Event('change', { bubbles: true }));
+await wait(80);
+ok('choosing OpenRouter reveals a key field', $$('#connect-pane input[type=password]').length >= 1 && /API key \(required\)/.test($('#connect-pane').textContent));
+const keyInput = $$('#connect-pane input[type=password]')[0];
+keyInput.value = 'sk-or-test-key';
+click($$('#connect-pane button').find((b) => /Save & use/.test(b.textContent)));
+await wait(300);
+ok('saving activates the provider', JSON.parse(w.localStorage.getItem('pp.settings.v1')).providerId === 'openrouter');
+ok('the key is stored in this browser only', PR.providerConfig('openrouter').apiKey === 'sk-or-test-key');
+ok('the active provider is labelled', /Active provider: OpenRouter/.test($('#connect-pane').textContent));
+ok('a way back to Puter is offered', $$('#connect-pane button').some((b) => /Switch back to Puter/.test(b.textContent)));
+click($$('#connect-pane button').find((b) => /Remove key/.test(b.textContent)));
+await wait(150);
+click([...$('.modal-backdrop').querySelectorAll('button')].find((b) => /^Remove$/.test(b.textContent.trim())));
+await wait(200);
+ok('the key can be removed again', PR.providerConfig('openrouter').apiKey === '');
+click($$('#connect-pane button').find((b) => /Switch back to Puter/.test(b.textContent)));
+await wait(250);
+ok('switching back restores the keyless default', JSON.parse(w.localStorage.getItem('pp.settings.v1')).providerId === 'puter');
+
+console.log('\n── connect pane: app connections');
+const ddgBtn = $$('#connect-pane .preset-row button').find((b) => /DuckDuckGo/.test(b.textContent));
+ok('keyless presets are offered', !!ddgBtn && $$('#connect-pane .preset-row button').some((b) => /Wikipedia/.test(b.textContent)));
+click(ddgBtn);
+await wait(200);
+ok('a preset becomes a connection row', $$('#connect-pane .conn-row').length === 1 && /api\.duckduckgo\.com/.test($('#connect-pane .conn-row').textContent));
+const enableBox = $('#connect-pane .conn-row input[type=checkbox]');
+enableBox.checked = false;
+enableBox.dispatchEvent(new w.Event('change', { bubbles: true }));
+await wait(150);
+ok('connections can be disabled', CN.listConnections()[0].enabled === false);
+enableBox.checked = true;
+enableBox.dispatchEvent(new w.Event('change', { bubbles: true }));
+await wait(120);
+click($$('#connect-pane .preset-row button').find((b) => /Custom app/.test(b.textContent)));
+await wait(200);
+let modal = $('.modal-backdrop');
+ok('custom connection form opens', /Connect an app/.test(modal?.textContent || ''));
+ok('auth choices are offered', [...modal.querySelectorAll('select option')].map((o) => o.text).join(',').includes('Bearer token'));
+const mInputs = [...modal.querySelectorAll('input.inp')];
+mInputs[0].value = 'Weather';
+mInputs[1].value = 'not-a-url';
+click([...modal.querySelectorAll('button')].find((b) => /Save connection/.test(b.textContent)));
+await wait(120);
+ok('a bad base URL is rejected', /http:\/\/ or https:\/\//.test($('.modal-backdrop .notice.err')?.textContent || ''), $('.modal-backdrop .notice.err')?.textContent);
+mInputs[1].value = 'https://api.weather.example/';
+click([...$('.modal-backdrop').querySelectorAll('button')].find((b) => /Save connection/.test(b.textContent)));
+await wait(250);
+ok('a valid connection is saved', CN.listConnections().some((c) => c.name === 'Weather' && c.baseUrl === 'https://api.weather.example'));
+ok('the new row is listed', $$('#connect-pane .conn-row').length === 2);
+const connDelBtn = $$('#connect-pane .conn-row').find((r) => /Weather/.test(r.textContent)).querySelectorAll('.icon-btn')[1];
+click(connDelBtn);
+await wait(150);
+click([...$('.modal-backdrop').querySelectorAll('button')].find((b) => /^Remove$/.test(b.textContent.trim())));
+await wait(200);
+ok('connections can be removed', !CN.listConnections().some((c) => c.name === 'Weather'));
+
+console.log('\n── routing chat through another provider');
+const customFetchLog = [];
+globalThis.fetch = async (url, init) => {
+  customFetchLog.push({ url: String(url), init });
+  const askedForStream = /"stream":\s*true/.test(String(init?.body || ''));
+  if (askedForStream) {
+    const enc = new TextEncoder();
+    const body = new ReadableStream({
+      start(c) {
+        c.enqueue(enc.encode('data: {"choices":[{"delta":{"role":"assistant","content":"Answer from "}}]}\n\n'));
+        c.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"the custom endpoint."},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":6}}\n\n'));
+        c.enqueue(enc.encode('data: [DONE]\n\n'));
+        c.close();
+      },
+    });
+    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  }
+  return new Response(JSON.stringify({
+    choices: [{ message: { role: 'assistant', content: 'Answer from the custom endpoint.' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 4, completion_tokens: 6 },
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+};
+PR.saveProviderConfig('custom', { baseUrl: 'https://llm.internal.example/v1', apiKey: 'k-123', model: 'house-model' });
+click($$('.wp-tab').find((t) => t.dataset.pane === 'connect'));
+await wait(150);
+const sel2 = $('#connect-pane select');
+sel2.value = 'custom';
+sel2.dispatchEvent(new w.Event('change', { bubbles: true }));
+await wait(100);
+click($$('#connect-pane button').find((b) => /Save & use/.test(b.textContent)));
+await wait(300);
+click($('#mode-chat'));
+await wait(80);
+click($('#btn-new-chat'));
+await wait(150);
+$('#input').value = 'hello from another provider';
+click($('#btn-send'));
+await wait(900);
+ok('the request went to the custom endpoint', customFetchLog.some((c) => c.url === 'https://llm.internal.example/v1/chat/completions'), customFetchLog.map((c) => c.url).join(','));
+ok('streaming was requested from the custom endpoint', /"stream":\s*true/.test(String(customFetchLog[0]?.init?.body || '')));
+ok('the custom key was used', customFetchLog[0]?.init?.headers?.Authorization === 'Bearer k-123');
+ok('Puter was not called for that turn', puterCalls.length === 0 || !puterCalls.at(-1).messages.some((m) => /hello from another provider/.test(JSON.stringify(m))));
+ok('the answer rendered in the transcript', $$('.msg.assistant .md').some((n) => /custom endpoint/.test(n.textContent)), $$('.msg.assistant .md').at(-1)?.textContent?.slice(0, 80));
+click($$('.wp-tab').find((t) => t.dataset.pane === 'connect'));
+await wait(150);
+click($$('#connect-pane button').find((b) => /Switch back to Puter/.test(b.textContent)));
+await wait(250);
+ok('back on Puter afterwards', JSON.parse(w.localStorage.getItem('pp.settings.v1')).providerId === 'puter');
+
+console.log('\n── agent network tools need approval');
+click($('#btn-new-chat'));          // a conversation with messages keeps its mode
+await wait(150);
+click($('#mode-agent'));
+await wait(80);
+if ($('#opt-auto').checked) { click($('#opt-auto')); await wait(100); }   // approvals ON
+scripted = [[{ type: 'tool_use', id: 'wf1', name: 'web_fetch', input: { url: 'https://docs.example.com/guide' } }], [{ type: 'text', text: 'Read it.' }]];
+$('#input').value = 'read that page for me';
+click($('#btn-send'));
+await wait(700);
+const approval = $('.modal-backdrop');
+ok('web_fetch asks before calling out', /external service you connected/.test(approval?.textContent || ''), approval?.textContent?.slice(0, 120));
+ok('the approval names the tool', /web_fetch/.test(approval?.textContent || ''));
+click([...approval.querySelectorAll('button')].find((b) => /deny|no/i.test(b.textContent)));
+await wait(600);
+ok('denying stops the call', !customFetchLog.some((c) => /docs\.example\.com/.test(c.url)));
+if (!$('#opt-auto').checked) { click($('#opt-auto')); await wait(100); }
+click($('#mode-chat'));
+await wait(60);
+
 console.log('\n── signed-out Puter pre-flight');
 w.localStorage.removeItem('pp.seenSignInNote.v1');
 signedIn = false;
