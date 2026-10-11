@@ -681,6 +681,88 @@ if (!$('#opt-auto').checked) { click($('#opt-auto')); await wait(100); }
 click($('#mode-chat'));
 await wait(60);
 
+console.log('\n── skills pane');
+const SKILLS = await import(`${REPO_ROOT}/js/skills.js`);
+const { workspace: wsSkills } = await import(`${REPO_ROOT}/js/workspace.js`);
+click($$('.wp-tab').find((t) => t.dataset.pane === 'skills'));
+await wait(250);
+ok('skills pane explains the open standard', /Agent Skills open standard/.test($('#skills-pane').textContent) && /SKILL\.md/.test($('#skills-pane').textContent));
+ok('empty state offers discovery paths', /No skills in the workspace/.test($('#skills-pane').textContent));
+const skillArea = $('#skills-pane textarea');
+skillArea.value = '---\nname: pdf-table-extract\ndescription: "Extracts tables from PDF files into CSV or JSON. Use when a task needs structured data out of a PDF report, invoice, or form."\nlicense: MIT\nallowed-tools: Bash(python:*) Read Write\n---\n## Steps\n1. Identify every page with a table.\n2. Extract rows and columns.';
+skillArea.dispatchEvent(new w.Event('input', { bubbles: true }));
+await wait(150);
+ok('pasted SKILL.md is detected before import', /Detected: <b>skill\.md<\/b>|Detected: skill\.md/.test($('#skills-pane .import-preview').textContent) || /skill\.md/.test($('#skills-pane .import-preview').textContent), $('#skills-pane .import-preview').textContent.slice(0, 90));
+ok('the preview names the skill', /pdf-table-extract/.test($('#skills-pane .import-preview').textContent));
+ok('the preview warns about requested tools', /Requests tools: Bash\(python:\*\) Read Write/.test($('#skills-pane .import-preview').textContent));
+click($$('#skills-pane button').find((b) => /Import pasted skill/.test(b.textContent)));
+await wait(400);
+ok('the skill is stored in the workspace', await wsSkills().exists('skills/pdf-table-extract/SKILL.md'));
+ok('the skill is listed in the pane', $$('#skills-pane .skill-row').length === 1 && /pdf-table-extract/.test($('#skills-pane .skill-row').textContent));
+ok('an imported skill starts unreviewed', /unreviewed/.test($('#skills-pane .skill-row').textContent));
+ok('requested tools are surfaced, not granted', /asks to pre-approve tools/.test($('#skills-pane .skill-row').textContent) && !JSON.parse(w.localStorage.getItem('pp.tools.allow.v1') || '[]').includes('read_file'));
+const allowReadBtn = $$('#skills-pane .skill-row button').find((b) => /^Allow read_file$/.test(b.textContent.trim()));
+ok('Claude tool names map onto this app', !!allowReadBtn && $$('#skills-pane .skill-row button').some((b) => /^Allow run_shell$/.test(b.textContent.trim())));
+click(allowReadBtn);
+await wait(200);
+ok('granting is an explicit click', JSON.parse(w.localStorage.getItem('pp.tools.allow.v1')).includes('read_file'));
+click($$('#skills-pane .skill-row button').find((b) => /^✓ read_file allowed$/.test(b.textContent.trim())));
+await wait(200);
+ok('and can be taken back', !JSON.parse(w.localStorage.getItem('pp.tools.allow.v1')).includes('read_file'));
+click($$('#skills-pane .skill-row button').find((b) => /^View$/.test(b.textContent.trim())));
+await wait(250);
+ok('the viewer shows the instructions', /Identify every page with a table/.test($('.modal-backdrop')?.textContent || ''));
+click([...$('.modal-backdrop').querySelectorAll('button')].find((b) => /Mark as reviewed/.test(b.textContent)));
+await wait(250);
+ok('review state can be recorded', /trusted/.test($('#skills-pane .skill-row').textContent));
+const gptArea = $('#skills-pane textarea');
+gptArea.value = JSON.stringify({ name: 'SEO Optimizer', description: 'Optimises pages for search.', instructions: 'Always crawl first, then list the top five issues.', capabilities: ['browser'] });
+gptArea.dispatchEvent(new w.Event('input', { bubbles: true }));
+await wait(150);
+ok('a ChatGPT custom GPT is detected', /chatgpt-gpt/.test($('#skills-pane .import-preview').textContent), $('#skills-pane .import-preview').textContent.slice(0, 90));
+click($$('#skills-pane button').find((b) => /Import pasted skill/.test(b.textContent)));
+await wait(400);
+ok('the GPT became a skill', await wsSkills().exists('skills/seo-optimizer/SKILL.md') && $$('#skills-pane .skill-row').length === 2);
+ok('its origin is badged', /chatgpt/.test($('#skills-pane').textContent));
+const nameField = $$('#skills-pane input.inp')[0];
+const seoRow = $$('#skills-pane .skill-row').find((r) => /seo-optimizer/.test(r.textContent));
+const seoToggle = seoRow.querySelector('input[type=checkbox]');
+seoToggle.checked = false;
+seoToggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+await wait(250);
+ok('skills can be disabled', (await SKILLS.listSkills(wsSkills())).find((x) => x.name === 'seo-optimizer').enabled === false);
+
+console.log('\n── agent skill tools');
+click($('#btn-new-chat'));
+await wait(150);
+click($('#mode-agent'));
+await wait(80);
+if (!$('#opt-auto').checked) { click($('#opt-auto')); await wait(100); }
+const beforeSkills = puterCalls.length;
+scripted = [
+  [{ type: 'tool_use', id: 's1', name: 'list_skills', input: {} },
+   { type: 'tool_use', id: 's2', name: 'use_skill', input: { name: 'pdf-table-extract' } },
+   { type: 'tool_use', id: 's3', name: 'create_skill', input: { name: 'Deploy Checklist', description: 'Pre-flight checks before shipping. Use before any deploy or release.', body: '## Steps\n1. Run the tests.\n2. Check the README.' } }],
+  [{ type: 'text', text: 'Loaded the PDF skill, and saved a deploy checklist skill.' }],
+];
+$('#input').value = 'use the pdf skill and save a deploy checklist as a skill';
+click($('#btn-send'));
+await wait(1800);
+const skillResults = puterCalls.slice(beforeSkills).flatMap((c) => c.messages).filter((m) => m.role === 'tool').map((m) => String(m.content)).join('\n');
+ok('list_skills answered from the workspace', /pdf-table-extract/.test(skillResults) && /seo-optimizer/.test(skillResults), skillResults.slice(0, 140));
+ok('list_skills notes a disabled skill', /DISABLED/.test(skillResults));
+ok('use_skill returned the instructions', /Identify every page with a table/.test(skillResults));
+ok('use_skill warns that allowed-tools is not granted', /NOT granted automatically/.test(skillResults));
+ok('create_skill wrote a new skill', await wsSkills().exists('skills/deploy-checklist/SKILL.md'));
+const newSystem = puterCalls.slice(beforeSkills).map((c) => c.messages.find((m) => m.role === 'system')?.content || '').join('\n');
+ok('the skills index is in the system prompt', /## Available skills/.test(newSystem) && /pdf-table-extract/.test(newSystem));
+const skillsSection = (/## Available skills[\s\S]*?(?=\n## |$)/.exec(newSystem)?.[0] || '').replace(/\s+/g, ' ');
+ok('disabled skills stay out of the skills index', !/seo-optimizer/.test(skillsSection), skillsSection.slice(0, 200));
+ok('the prompt says skills cannot widen permissions', /cannot widen your permissions/.test(skillsSection), skillsSection.slice(0, 200));
+click($$('.wp-tab').find((t) => t.dataset.pane === 'skills'));
+await wait(300);
+ok('the pane picked up the agent-created skill', $$('#skills-pane .skill-row').length === 3);
+
 console.log('\n── signed-out Puter pre-flight');
 w.localStorage.removeItem('pp.seenSignInNote.v1');
 signedIn = false;

@@ -268,6 +268,12 @@ export async function runAgentTurn(o) {
       memoryBlock = memoryPromptBlock(query, { budgetChars: settings.memoryBudgetChars || 1600 });
     } catch { /* memory is best-effort; never break a run over it */ }
   }
+  let skillsBlock = '';
+  try {
+    const { skillsPromptBlock } = await import('./skills.js');
+    skillsBlock = await skillsPromptBlock(ws, query);
+  } catch { /* skills are optional */ }
+
   const creds = clientFromStorage();
   let workspaceDescription = `${ws.id} workspace`;
   try {
@@ -285,10 +291,12 @@ export async function runAgentTurn(o) {
       date: new Date().toDateString(),
       protocol: useNative ? 'native' : 'text',
       memory: memoryBlock || undefined,
+      skills: skillsBlock || undefined,
     })
     : chatSystemPrompt(settings, {
       model, date: new Date().toDateString(), workspaceTree: tree || undefined,
       memory: memoryBlock || undefined,
+      skills: skillsBlock || undefined,
     });
 
   const messages = [
@@ -320,6 +328,7 @@ export async function runAgentTurn(o) {
     // go back to the model (a base64 image in context would burn credits for nothing)
     onMedia: (m) => ui.onMedia?.(m),
     onMemory: () => ui.onMemory?.(),
+    onSkills: () => ui.onSkills?.(),
     convId: conv?.id || null,
     onOutput: (level, text) => ui.onOutput?.(level, text),
     onProgress: (frac, label) => ui.onProgress?.(frac, label),

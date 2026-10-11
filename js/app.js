@@ -19,6 +19,7 @@ import { PublishPane } from './publish-pane.js';
 import { MediaPane } from './media-pane.js';
 import { MemoryPane } from './memory-pane.js';
 import { ConnectionsPane } from './connections-pane.js';
+import { SkillsPane } from './skills-pane.js';
 import { ModelPicker } from './modelpicker.js';
 import { openSettings } from './settings.js';
 import { icon, toast, openModal, confirmDialog, promptDialog, approvalDialog, askUserDialog } from './ui.js';
@@ -122,6 +123,12 @@ async function boot() {
     complete: (messages, opts) => llmComplete(messages, opts),
   });
 
+  app.skillsPane = new SkillsPane({
+    container: $('#skills-pane'),
+    getWs: () => workspace(),
+    openFile: (path) => { switchTab('files'); app.filesPane.open(path).catch(() => {}); },
+  });
+
   app.connPane = new ConnectionsPane({
     container: $('#connect-pane'),
     getSettings: () => state.settings,
@@ -173,7 +180,7 @@ async function boot() {
     if (app.ghPane) app.ghPane.state.settings = s;
     if (app.pubPane) app.pubPane.state.settings = s;
   });
-  onWorkspaceChange(() => { app.filesPane.refreshTree(); refreshWorkspaceMeta(); });
+  onWorkspaceChange(() => { app.filesPane.refreshTree(); refreshWorkspaceMeta(); app.skillsPane?.refresh(); });
 }
 
 function signedInLabel() {
@@ -323,6 +330,7 @@ function switchTab(name) {
   if (name === 'files') app.filesPane.refresh();
   if (name === 'create') app.mediaPane?.loadRefs();
   if (name === 'memory') app.memPane?.refresh();
+  if (name === 'skills') app.skillsPane?.refresh();
   if (name === 'connect') app.connPane?.refresh();
   if (name === 'github') app.ghPane.renderSide();
 }
@@ -652,6 +660,7 @@ async function runTurn(conv) {
     askUser: (q, options) => askUserDialog(q, options),
     onMedia: (media) => { app.chatView.showMedia(activeConversation(), media); app.filesPane.refresh(); },
     onMemory: () => { app.memPane?.refresh(); queueMemoryPush(); },
+    onSkills: () => app.skillsPane?.refresh(),
     requestApproval: (call) => approvalDialog(call),
     setRepo: (full) => app.ghPane?.setRepo(full),
   };

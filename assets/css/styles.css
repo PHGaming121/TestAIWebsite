@@ -708,3 +708,18 @@ input[type=range]{accent-color:var(--accent);width:130px}
 .conn-name{display:flex;gap:6px;align-items:center;font-size:13px}
 .conn-name input{accent-color:var(--accent)}
 .conn-url{font-family:var(--mono);font-size:11.4px;color:var(--text-dim);word-break:break-all;margin-top:2px}
+
+/* ── skills pane ───────────────────────────────────────── */
+.skill-list{display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow:auto}
+.skill-row{display:flex;gap:8px;align-items:flex-start;padding:10px;border:1px solid var(--border);
+  border-radius:10px;background:var(--panel)}
+.skill-row:hover{border-color:var(--accent)}
+.skill-main{flex:1;min-width:0}
+.skill-name{display:flex;gap:7px;align-items:center;font-size:13px}
+.skill-name input{accent-color:var(--accent)}
+.skill-desc{font-size:12.4px;color:var(--text-dim);margin:3px 0 6px;line-height:1.45}
+.skill-badges{display:flex;flex-wrap:wrap;gap:5px}
+.skill-body{max-height:46vh;overflow:auto;background:var(--panel-2);border:1px solid var(--border);
+  border-radius:10px;padding:11px;font-family:var(--mono);font-size:12px;white-space:pre-wrap;margin:8px 0 0}
+.import-preview:empty{display:none}
+.import-preview{margin-top:8px}

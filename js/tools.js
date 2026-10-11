@@ -659,6 +659,97 @@ const puterTools = [
       return `${head}\n\n${res.text}`;
     }),
 
+  /* ═══ skills (Agent Skills open standard) ═══ */
+  tool('list_skills',
+    'List the skills installed in the workspace (SKILL.md folders imported from Claude, ChatGPT, Gemini, Cursor or written here). Each has a name and a description of when to use it.',
+    obj({}),
+    APPROVAL.READ,
+    async (ctx) => {
+      const { listSkills } = await import('./skills.js');
+      const skills = await listSkills(ctx.ws);
+      if (!skills.length) return 'No skills installed. The user can import them in the Skills tab (SKILL.md, a ChatGPT custom GPT, a Gemini Gem, or a .zip).';
+      return skills.map((s) => `- ${s.name}${s.enabled ? '' : ' (DISABLED)'}: ${s.description}${s.errors?.length ? `\n  INVALID: ${s.errors.join('; ')}` : ''}${s.allowedTools ? `\n  requests tools: ${s.allowedTools}` : ''}`).join('\n');
+    }),
+
+  tool('use_skill',
+    'Load a skill\'s full instructions and follow them. Use it when the task matches a skill from list_skills or from the skills index in your prompt. Returns the SKILL.md body plus the files bundled with it.',
+    obj({ name: str('Skill name exactly as listed.') }, ['name']),
+    APPROVAL.READ,
+    async (ctx, args) => {
+      const { readSkillBody } = await import('./skills.js');
+      const skill = await readSkillBody(ctx.ws, String(args.name));
+      if (!skill) return `ERROR: no skill named "${args.name}". Run list_skills.`;
+      if (!skill.enabled) return `ERROR: the skill "${skill.name}" is disabled in the Skills tab. Ask the user to enable it.`;
+      const head = [`# Skill: ${skill.name}`, skill.description, ''];
+      if (skill.compatibility) head.push(`Compatibility: ${skill.compatibility}`);
+      if (skill.license) head.push(`License: ${skill.license}`);
+      if (skill.allowedTools) head.push(`NOTE: this skill requests pre-approval for: ${skill.allowedTools}. That request is NOT granted automatically — the user still approves each call.`);
+      if (skill.files?.length) head.push(`Bundled files (read them with read_file if the instructions say so): ${skill.files.map((f) => f.path).join(', ')}`);
+      head.push('', '--- instructions ---', '');
+      return head.join('\n') + skill.body;
+    }),
+
+  tool('create_skill',
+    'Write a new skill into the workspace as skills/<name>/SKILL.md, following the Agent Skills open standard so Claude, ChatGPT, Codex, Gemini CLI and Cursor can all read it. Use it when the user asks to save a repeatable procedure, or after you have done something worth reusing.',
+    obj({
+      name: str('Kebab-case skill name, max 64 chars: "pdf-table-extract".'),
+      description: str('What it does AND when to use it, max 1024 chars. This is what the agent matches tasks against, so be specific.'),
+      body: str('Markdown instructions: steps, gotchas, examples. Keep under ~500 lines; move long references into files.'),
+      license: str('Optional SPDX licence, e.g. "MIT".'),
+      compatibility: str('Optional environment requirements, max 500 chars.'),
+      extra_files: { type: 'object', description: 'Optional map of relative path to text content, stored beside SKILL.md (e.g. {"references/api.md": "…"}).' },
+      overwrite: bool('Optional: replace an existing skill of the same name.'),
+    }, ['name', 'description', 'body']),
+    APPROVAL.WRITE,
+    async (ctx, args) => {
+      const { saveSkill } = await import('./skills.js');
+      const saved = await saveSkill(ctx.ws, {
+        name: args.name, description: args.description, body: args.body,
+        license: args.license, compatibility: args.compatibility,
+        metadata: { source: 'agent' }, source: 'agent', overwrite: !!args.overwrite,
+      });
+      const extras = args.extra_files && typeof args.extra_files === 'object' ? Object.entries(args.extra_files) : [];
+      for (const [rel, content] of extras) {
+        if (typeof content !== 'string' || !rel || rel.includes('..')) continue;
+        await ctx.ws.write(`${saved.dir}/${rel.replace(/^\/+/, '')}`, content);
+      }
+      ctx.touch?.(saved.path);
+      ctx.onSkills?.();
+      return `Skill "${saved.name}" written to ${saved.path}${extras.length ? ` (+${extras.length} bundled file(s))` : ''}. It is enabled and will be offered in future turns.`;
+    }),
+
+  tool('import_skill',
+    'Import a skill from text or a URL: an Agent Skills SKILL.md, a ChatGPT custom-GPT JSON export, a Gemini Gem, or a CLAUDE.md / AGENTS.md rules file. The format is detected automatically.',
+    obj({
+      url: str('URL of a raw SKILL.md or JSON export (e.g. a raw.githubusercontent.com link).'),
+      text: str('Or paste the payload directly.'),
+      name: str('Optional name override.'),
+      overwrite: bool('Optional: replace an existing skill of the same name.'),
+    }),
+    APPROVAL.WRITE,
+    async (ctx, args) => {
+      const { parseImport, saveSkill } = await import('./skills.js');
+      let payload = typeof args.text === 'string' ? args.text : '';
+      if (!payload && args.url) {
+        const { webFetch } = await import('./connections.js');
+        const page = await webFetch(String(args.url), { maxChars: 60000, asHtml: false });
+        payload = page.text;
+      }
+      if (!payload) return 'ERROR: supply either `url` or `text`.';
+      const parsed = parseImport(payload, { fileName: args.url ? String(args.url).split('/').pop() : '' });
+      if (parsed.errors.length) return `ERROR: that payload is not a valid skill: ${parsed.errors.join('; ')}`;
+      const saved = await saveSkill(ctx.ws, { ...parsed, name: args.name || parsed.name, source: parsed.kind, overwrite: !!args.overwrite });
+      ctx.touch?.(saved.path);
+      ctx.onSkills?.();
+      const notes = [
+        `Imported "${saved.name}" (${parsed.kind}) → ${saved.path}`,
+        parsed.warnings.length ? `Warnings: ${parsed.warnings.join('; ')}` : '',
+        parsed.allowedTools ? `It requests these tools, which are NOT auto-approved: ${parsed.allowedTools}` : '',
+        parsed.metadata?.source === 'chatgpt-custom-gpt' && parsed.hasActions ? 'It has an API action — add that endpoint in the Connect tab to call it.' : '',
+      ].filter(Boolean);
+      return notes.join('\n');
+    }),
+
   tool('ask_user',
     'Ask the human a question and wait for the answer. Use it when a decision is genuinely ambiguous (repo name, visibility, design direction) — not for things you can decide yourself.',
     obj({

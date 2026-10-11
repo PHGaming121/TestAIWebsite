@@ -598,5 +598,156 @@ fetchImpl = null;
 CN.listConnections().slice().forEach((c) => CN.removeConnection(c.id));
 
 
+
+/* ══════ skills ══════ */
+const SK = await import(`${ROOT}/skills.js`);
+const skillWs = await createWorkspace('memory', { id: 'skill-test' });
+setWorkspace(skillWs);
+
+section('skills: SKILL.md parsing');
+const SKILL_MD = `---
+name: pdf-table-extract
+description: "Extracts tables from PDF files into CSV or JSON, handling multi-page tables and merged headers. Use when a task needs structured data out of a PDF report, invoice, or form."
+license: MIT
+compatibility: Requires Python 3.11+ and uv
+metadata:
+  author: example-org
+  version: "1.0"
+allowed-tools: Bash(python:*) Read Write
+---
+## Steps
+1. Identify every page that contains a table.
+2. Extract rows and columns, preserving header labels.
+
+## Error handling
+If a page is a scanned image with no text layer, say so instead of guessing.
+`;
+const parsedMd = SK.parseSkillMd(SKILL_MD);
+ok('frontmatter is detected', parsedMd.hadFrontmatter === true);
+ok('name + description parsed', parsedMd.data.name === 'pdf-table-extract' && /structured data/.test(parsedMd.data.description));
+ok('quoted description is unquoted', !parsedMd.data.description.startsWith('"'));
+ok('nested metadata map parsed', parsedMd.data.metadata?.author === 'example-org' && parsedMd.data.metadata?.version === '1.0');
+ok('allowed-tools kept verbatim', parsedMd.data['allowed-tools'] === 'Bash(python:*) Read Write');
+ok('body starts after the frontmatter', parsedMd.body.startsWith('## Steps') && /Error handling/.test(parsedMd.body));
+ok('no frontmatter is handled', SK.parseSkillMd('# just markdown').hadFrontmatter === false);
+ok('inline lists parse', SK.parseSimpleYaml('compatibility: [Claude Code, Cursor]').compatibility.join(',') === 'Claude Code,Cursor');
+ok('block lists parse', SK.parseSimpleYaml('compatibility:\n  - Claude Code\n  - Cursor').compatibility.join(',') === 'Claude Code,Cursor');
+ok('folded multi-line descriptions parse', /PDF report/.test(SK.parseSimpleYaml('description: Extracts tables from PDFs.\n  Use when a task needs data from a PDF report.').description));
+
+section('skills: validation against the spec');
+const good = SK.validateSkill({ name: 'pdf-table-extract', description: 'Extracts tables from PDFs into CSV. Use when a task needs structured data from a report.' }, { folderName: 'pdf-table-extract', body: 'x' });
+ok('a valid skill has no errors', good.errors.length === 0, good.errors.join('; '));
+ok('a bad name is rejected', SK.validateSkill({ name: 'Pdf Tables!', description: 'x'.repeat(40) }, {}).errors.some((e) => /lowercase/.test(e)));
+ok('name over 64 chars is rejected', SK.validateSkill({ name: 'a'.repeat(65), description: 'x'.repeat(40) }, {}).errors.some((e) => /maximum is 64/.test(e)));
+ok('doubled hyphens are rejected', SK.validateSkill({ name: 'a--b', description: 'x'.repeat(40) }, {}).errors.some((e) => /hyphens/.test(e)));
+ok('folder mismatch is rejected', SK.validateSkill({ name: 'a-b', description: 'x'.repeat(40) }, { folderName: 'other' }).errors.some((e) => /does not match its folder/.test(e)));
+ok('description over 1024 chars is rejected', SK.validateSkill({ name: 'a-b', description: 'x'.repeat(1025) }).errors.some((e) => /maximum is 1024/.test(e)));
+ok('angle brackets in a description are rejected', SK.validateSkill({ name: 'a-b', description: 'Do <script> things here for the user' }).errors.some((e) => /angle brackets/.test(e)));
+ok('unknown frontmatter keys are rejected', SK.validateSkill({ name: 'a-b', description: 'x'.repeat(40), author: 'me' }).errors.some((e) => /unknown frontmatter key/.test(e)));
+ok('missing description is rejected', SK.validateSkill({ name: 'a-b' }).errors.some((e) => /required `description`/.test(e)));
+ok('over-long compatibility is rejected', SK.validateSkill({ name: 'a-b', description: 'x'.repeat(40), compatibility: 'y'.repeat(501) }).errors.some((e) => /compatibility/.test(e)));
+ok('a 600-line body warns', SK.validateSkill({ name: 'a-b', description: 'x'.repeat(40) }, { body: Array(600).fill('line').join('\n') }).warnings.some((w) => /500/.test(w)));
+ok('a terse description warns', SK.validateSkill({ name: 'a-b', description: 'short' }).warnings.length >= 1);
+ok('skillNameFrom normalises anything', SK.skillNameFrom('PDF Table Extract!!') === 'pdf-table-extract' && SK.skillNameFrom('--Weird__Name--') === 'weird-name');
+
+section('skills: round-trip and storage');
+const written = SK.serializeSkillMd({ name: 'demo-skill', description: 'A demo skill for tests.', license: 'MIT', metadata: { source: 'unit-test' }, allowedTools: ['Read', 'Write'] }, '## Steps\n1. Do the thing.');
+const reparsed = SK.parseSkillMd(written);
+ok('serialise → parse round-trips', reparsed.data.name === 'demo-skill' && reparsed.data.license === 'MIT' && /Do the thing/.test(reparsed.body));
+ok('metadata survives the round-trip', reparsed.data.metadata?.source === 'unit-test');
+ok('allowed-tools survive as a space-separated string', reparsed.data['allowed-tools'] === 'Read Write');
+ok('serialised output starts at byte 0 with ---', written.startsWith('---\n'));
+const saved = await SK.saveSkill(skillWs, { name: 'Demo Skill!', description: 'A demo skill that does a thing. Use it when testing.', body: '## Steps\n1. Do it.', source: 'unit-test' });
+ok('saveSkill normalises the name and writes SKILL.md', saved.name === 'demo-skill' && saved.path === 'skills/demo-skill/SKILL.md');
+ok('the file is really in the workspace', await skillWs.exists('skills/demo-skill/SKILL.md'));
+await skillWs.write('skills/with-tools/SKILL.md', '---\nname: with-tools\ndescription: A skill that declares tool permissions for the agent to use.\nallowed-tools: Bash(git:*) Read\n---\nDo things.');
+const reimported = SK.parseImport(await skillWs.read('skills/with-tools/SKILL.md'));
+const resaved = await SK.saveSkill(skillWs, { ...reimported, source: 'unit-test', overwrite: true });
+ok('saving a skill keeps its declared allowed-tools', /allowed-tools: "?Bash\(git:\*\) Read"?/.test(await skillWs.read(resaved.path)), (await skillWs.read(resaved.path)).slice(0, 160));
+let serr = '';
+try { await SK.saveSkill(skillWs, { name: 'demo-skill', description: 'Another one.' }); } catch (e) { serr = e.message; }
+ok('refuses to clobber an existing skill without overwrite', /already exists/.test(serr));
+serr = '';
+try { await SK.saveSkill(skillWs, { name: 'x', description: '' }); } catch (e) { serr = e.message; }
+ok('refuses a skill with no description', /needs a description/.test(serr));
+serr = '';
+try { await SK.saveSkill(skillWs, { name: 'bad', description: 'has <angle> brackets in it and is long enough' }); } catch (e) { serr = e.message; }
+ok('refuses a spec-invalid skill', /not valid/.test(serr), serr);
+const listed = await SK.listSkills(skillWs);
+const demo = listed.find((x) => x.name === 'demo-skill');
+ok('listSkills finds it with frontmatter only', !!demo && /Use it when testing/.test(demo.description));
+ok('skills are enabled by default', demo?.enabled === true && demo?.trusted === false);
+const full = await SK.readSkillBody(skillWs, 'demo-skill');
+ok('readSkillBody returns the instructions', /Do it/.test(full.body));
+await skillWs.write('skills/demo-skill/references/api.md', '# API notes');
+const withFiles = await SK.readSkillBody(skillWs, 'demo-skill');
+ok('bundled files are listed for the agent', withFiles.files.some((f) => f.path === 'skills/demo-skill/references/api.md'));
+SK.setSkillState('demo-skill', { enabled: false });
+ok('disabling hides it from the prompt', (await SK.listSkills(skillWs)).find((x) => x.name === 'demo-skill').enabled === false);
+SK.setSkillState('demo-skill', { enabled: true, trusted: true });
+ok('trust state persists', JSON.parse(w.localStorage.getItem('pp.skills.v1'))['demo-skill'].trusted === true);
+
+section('skills: discovery in other agents\' folders');
+await skillWs.write('.claude/skills/claude-one/SKILL.md', '---\nname: claude-one\ndescription: A skill from Claude Code. Use when the user mentions Claude.\n---\nDo it the Claude way.');
+await skillWs.write('.agents/skills/codex-one/SKILL.md', '---\nname: codex-one\ndescription: A skill from OpenAI Codex. Use when working with Codex.\n---\nDo it the Codex way.');
+await skillWs.write('.gemini/skills/gem-one/SKILL.md', '---\nname: gem-one\ndescription: A skill from Gemini CLI. Use for Gemini tasks.\n---\nDo it the Gemini way.');
+await skillWs.write('notes/SKILL.md', '---\nname: not-a-skill\ndescription: Lives outside a skills folder so it must be ignored.\n---\nNope.');
+await skillWs.write('skills/nested/deeper/SKILL.md', '---\nname: too-deep\ndescription: Nested too deeply to be a skill root.\n---\nNope.');
+const discovered = await SK.listSkills(skillWs);
+ok('finds skills in .claude, .agents and .gemini folders', ['claude-one', 'codex-one', 'gem-one'].every((n) => discovered.some((s) => s.name === n)), discovered.map((s) => s.name).join(','));
+ok('ignores SKILL.md outside a skills root', !discovered.some((s) => s.name === 'not-a-skill'));
+ok('ignores nested SKILL.md files', !discovered.some((s) => s.name === 'too-deep'));
+ok('records which root each came from', discovered.find((s) => s.name === 'claude-one').root === '.claude/skills');
+
+section('skills: importers for other assistants');
+ok('detects a SKILL.md', SK.detectSkillSource(SKILL_MD) === 'skill.md');
+const GPT_JSON = JSON.stringify({
+  name: 'SEO Optimizer', description: 'Optimises pages for search.', greeting: 'Hi! I will optimise your page.',
+  instructions: 'Always start by crawling the URL. Then list the top 5 issues.', knowledge: ['guidelines.pdf'],
+  capabilities: ['browser'], actions: { url: 'https://api.seo.example/v1', openapi: { openapi: '3.0.0', paths: { '/audit': {} } } },
+});
+ok('detects a ChatGPT custom GPT', SK.detectSkillSource(GPT_JSON) === 'chatgpt-gpt');
+const gpt = SK.fromCustomGpt(GPT_JSON);
+ok('GPT name becomes kebab-case', gpt.name === 'seo-optimizer', gpt.name);
+ok('GPT instructions become the body', /crawling the URL/.test(gpt.body) && /Greeting/.test(gpt.body));
+ok('GPT knowledge files are listed for follow-up', /guidelines\.pdf/.test(gpt.body));
+ok('GPT API actions are captured, not silently wired', gpt.hasActions === true && /api\.seo\.example/.test(gpt.body) && /call_connection/.test(gpt.body));
+ok('GPT import records its source', gpt.metadata.source === 'chatgpt-custom-gpt');
+const GEM_JSON = JSON.stringify({ name: 'Trip Planner', instructions: 'Ask about dates first, then suggest three itineraries.' });
+ok('detects a Gemini Gem', SK.detectSkillSource(GEM_JSON) === 'gemini-gem');
+const gem = SK.fromGem(GEM_JSON);
+ok('Gem becomes a skill', gem.name === 'trip-planner' && /three itineraries/.test(gem.body) && gem.metadata.source === 'gemini-gem');
+ok('detects a CLAUDE.md rules file', SK.detectSkillSource('# CLAUDE.md\n\nAlways run tests before committing.') === 'rules-file');
+const rules = SK.fromRulesFile('# CLAUDE.md\n\nAlways run tests before committing.', 'CLAUDE.md');
+ok('rules file becomes a skill with a useful description', /Always run tests/.test(rules.body) && /Project rules/.test(rules.description));
+ok('detects plain markdown', SK.detectSkillSource('# My Process\n\nDo these things in order.') === 'markdown');
+ok('an imported SKILL.md parses cleanly', SK.parseImport(SKILL_MD).kind === 'skill.md' && SK.parseImport(SKILL_MD).errors.length === 0);
+const importedGpt = SK.parseImport(GPT_JSON);
+ok('an imported GPT validates', importedGpt.errors.length === 0, importedGpt.errors.join('; '));
+ok('import flags allowed-tools rather than granting them', SK.parseImport(SKILL_MD).allowedTools === 'Bash(python:*) Read Write');
+const savedImport = await SK.saveSkill(skillWs, { ...importedGpt, source: importedGpt.kind, overwrite: true });
+ok('an imported GPT is stored as a skill', await skillWs.exists('skills/seo-optimizer/SKILL.md') && savedImport.name === 'seo-optimizer');
+
+section('skills: prompt injection');
+const skillBlock = await SK.skillsPromptBlock(skillWs, 'optimise my page for search');
+ok('the index lists skill names and descriptions', /## Available skills/.test(skillBlock) && /seo-optimizer/.test(skillBlock) && /demo-skill/.test(skillBlock));
+ok('the matching skill is ranked first', skillBlock.indexOf('seo-optimizer') < skillBlock.indexOf('demo-skill'), skillBlock.slice(0, 200));
+ok('it tells the agent how to activate one', /use_skill/.test(skillBlock));
+ok('it warns that skills cannot widen permissions', /cannot widen your permissions|skip an approval/i.test(skillBlock));
+SK.setSkillState('demo-skill', { enabled: false });
+ok('disabled skills are not offered', !(await SK.skillsPromptBlock(skillWs, 'demo')).includes('demo-skill'));
+SK.setSkillState('demo-skill', { enabled: true });
+await SK.deleteSkill(skillWs, 'demo-skill');
+ok('deleteSkill removes the folder', !(await skillWs.exists('skills/demo-skill/SKILL.md')));
+serr = '';
+try { await SK.deleteSkill(skillWs, 'demo-skill'); } catch (e) { serr = e.message; }
+ok('deleting a missing skill reports it', /No skill named/.test(serr));
+await skillWs.write('skills/broken/SKILL.md', '---\nname: BROKEN Name\ndescription: x\n---\nbody');
+const brokenList = await SK.listSkills(skillWs);
+ok('an invalid skill is listed with its errors, not hidden', brokenList.find((s) => s.folder === 'broken')?.errors.length > 0);
+ok('invalid skills stay out of the prompt', !(await SK.skillsPromptBlock(skillWs, 'broken')).includes('broken'));
+setWorkspace(await createWorkspace('memory', { id: 'unit-test' }));
+
+
 console.log(`\n═══ ${pass} passed, ${fail} failed ═══`);
 process.exit(fail ? 1 : 0);
