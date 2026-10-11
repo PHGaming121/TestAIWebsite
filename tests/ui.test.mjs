@@ -408,6 +408,91 @@ ok('tool results are short text, not base64', resultsSent.length >= 1 && results
 ok('no media bytes were sent back to the model', !puterCalls.slice(beforeMedia).some((c) => JSON.stringify(c.messages).includes('data:image')));
 ok('media tools are approval-gated WRITE tools', toolCards.length >= 0);
 
+console.log('\n── memory pane');
+const MEM = await import(`${REPO_ROOT}/js/memory.js`);
+MEM.clearMemories();
+MEM.addMemory({ text: 'The user ships everything to GitHub Pages.', kind: 'decision', tags: ['deploy'] });
+MEM.addMemory({ text: 'The user prefers plain JavaScript over TypeScript.', kind: 'preference' });
+click($$('.wp-tab').find((t) => t.dataset.pane === 'memory'));
+await wait(150);
+ok('memory pane rendered', /Long-term memory/.test($('#memory-pane').textContent));
+ok('stats count the memories', /2 memories/.test($('#memory-pane').textContent), $('#memory-pane').textContent.slice(0, 120));
+ok('both memories listed', $$('#memory-pane .mem-row').length === 2);
+ok('kind tags shown', /decision/.test($('#memory-pane').textContent) && /preference/.test($('#memory-pane').textContent));
+$('#memory-pane input[type=search]').value = 'typescript';
+$('#memory-pane input[type=search]').dispatchEvent(new w.Event('input', { bubbles: true }));
+await wait(120);
+ok('search filters the list', $$('#memory-pane .mem-row').length === 1 && /JavaScript/.test($('#memory-pane .mem-row').textContent));
+$('#memory-pane input[type=search]').value = '';
+$('#memory-pane input[type=search]').dispatchEvent(new w.Event('input', { bubbles: true }));
+await wait(120);
+ok('clearing the search restores the list', $$('#memory-pane .mem-row').length === 2);
+ok('pin / edit / delete controls exist', $$('#memory-pane .mem-row .mem-actions .icon-btn').length === 6);
+click($$('#memory-pane .mem-row')[0].querySelector('.mem-actions .icon-btn'));
+await wait(120);
+ok('pinning marks the memory', MEM.memories().some((m) => m.pinned));
+ok('cloud mirror is off by default', $('#memory-pane input[type=checkbox]').checked === false);
+const prefRow = $$('#memory-pane .mem-row').find((r) => /JavaScript/.test(r.textContent));
+const delBtn = prefRow.querySelectorAll('.mem-actions .icon-btn')[2];
+click(delBtn);
+await wait(150);
+const confirmDlg = $('.modal-backdrop');
+ok('delete asks for confirmation', /Delete this memory\?/.test(confirmDlg?.textContent || ''));
+click([...confirmDlg.querySelectorAll('button')].find((b) => /^Delete$/.test(b.textContent.trim())));
+await wait(200);
+ok('delete removed it', MEM.memories().length === 1);
+
+console.log('\n── agent memory tools');
+click($('#btn-new-chat'));
+await wait(150);
+const beforeMem = puterCalls.length;
+scripted = [
+  [{ type: 'tool_use', id: 'r1', name: 'remember', input: { text: 'The user is building TestAIWebsite, a static Puter playground.', kind: 'project', tags: ['repo'] } },
+   { type: 'tool_use', id: 'r2', name: 'recall', input: { query: 'GitHub Pages deploy' } }],
+  [{ type: 'text', text: 'Noted — and yes, you ship to GitHub Pages.' }],
+];
+$('#input').value = 'remember that project, and what do you know about how I deploy?';
+click($('#btn-send'));
+await wait(1500);
+ok('remember stored the memory', MEM.memories().some((m) => m.kind === 'project' && /TestAIWebsite/.test(m.text)));
+ok('recall found the deployment decision', MEM.memories().some((m) => m.hits > 0), JSON.stringify(MEM.memories().map((m) => m.hits)));
+const recallResult = puterCalls.slice(beforeMem).flatMap((c) => c.messages).filter((m) => m.role === 'tool').map((m) => String(m.content)).join('\n');
+ok('recall returned the memory to the model', /GitHub Pages/.test(recallResult), recallResult.slice(0, 140));
+ok('recall exposes ids so forget can target one', /id: mem_/.test(recallResult), recallResult.slice(0, 120));
+const lastSystem = puterCalls.at(-1).messages.find((m) => m.role === 'system')?.content || '';
+ok('memory is injected into the next system prompt', /Long-term memory/.test(lastSystem) && /GitHub Pages/.test(lastSystem));
+ok('memory block tells the model not to invent memories', /Never invent memories/.test(lastSystem));
+scripted = [[{ type: 'tool_use', id: 'f1', name: 'forget', input: { query: 'TestAIWebsite project' } }], [{ type: 'text', text: 'Forgotten.' }]];
+$('#input').value = 'actually, forget that project note';
+click($('#btn-send'));
+await wait(1200);
+ok('forget deleted it', !MEM.memories().some((m) => /TestAIWebsite/.test(m.text)));
+ok('memory pane refreshed after agent changes', $$('#memory-pane .mem-row').length === MEM.memories().length);
+
+console.log('\n── memory distillation');
+MEM.clearMemories();
+click($('#btn-new-chat'));
+await wait(120);
+click($('#mode-chat'));
+await wait(80);
+scripted = [[{ type: 'text', text: 'Hello!' }]];
+$('#input').value = 'hi';
+click($('#btn-send'));
+await wait(700);
+click($$('.wp-tab').find((t) => t.dataset.pane === 'memory'));
+await wait(120);
+scripted = [[{ type: 'text', text: '```json\n[{"text":"The user greets tersely.","kind":"preference","tags":["style"]},{"text":"The user works late.","kind":"fact"}]\n```' }]];
+click($$('#memory-pane button').find((b) => /Distil memories/.test(b.textContent)));
+await wait(900);
+ok('distil proposed candidates', $$('#memory-pane .cand').length === 2, String($$('#memory-pane .cand').length));
+ok('candidates are ticked by default', $$('#memory-pane .cand input').every((c) => c.checked));
+$$('#memory-pane .cand input')[1].checked = false;
+click($$('#memory-pane button').find((b) => /Save selected/.test(b.textContent)));
+await wait(250);
+ok('only the ticked candidate was saved', MEM.memories().length === 1 && /tersely/.test(MEM.memories()[0].text));
+ok('saved with its kind and tags', MEM.memories()[0].kind === 'preference' && MEM.memories()[0].tags.includes('style'));
+ok('distilled memories say where they came from', MEM.memories()[0].source === 'distill');
+
 console.log('\n── settings modal');
 click($('#btn-settings'));
 await wait(150);

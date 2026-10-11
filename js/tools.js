@@ -532,6 +532,76 @@ const puterTools = [
       return `Generated ${media.testMode ? 'test-sample ' : ''}video → ${path} (${formatBytes(media.blob.size)}, model: ${media.model}${media.seconds ? `, ${media.seconds}s` : ''})`;
     }),
 
+  /* ═══ long-term memory ═══ */
+  tool('remember',
+    'Save a durable fact to long-term memory so it is known in every future conversation: who the user is, their preferences, their environment, ongoing projects, standing decisions. Do NOT save task-specific details, file contents, or secrets (keys, tokens, passwords).',
+    obj({
+      text: str('One sentence, third person, self-contained: "The user prefers TypeScript over JavaScript."'),
+      kind: str('One of: fact | preference | project | decision | person | note.'),
+      tags: { type: 'array', items: { type: 'string' }, description: 'Optional short kebab-case tags for retrieval, e.g. ["typescript","style"]' },
+      pinned: bool('Optional: pin it so it is always injected into the prompt, not just when relevant.'),
+    }, ['text']),
+    APPROVAL.WRITE,
+    async (ctx, args) => {
+      const { addMemory } = await import('./memory.js');
+      const { entry, deduped } = addMemory({
+        text: args.text, kind: args.kind || 'note', tags: args.tags || [], pinned: !!args.pinned,
+        source: 'agent', conv: ctx.convId || null,
+      });
+      ctx.onMemory?.();
+      return `${deduped ? 'Updated the existing memory' : 'Remembered'} [${entry.kind}] ${entry.text}`;
+    }),
+
+  tool('recall',
+    'Search long-term memory. Use it before answering anything about the user, their preferences, their projects or past decisions — and whenever the user says "you know", "as I said", "my usual", "remember when".',
+    obj({
+      query: str('What to look for, in the user\'s own words where possible.'),
+      kind: str('Optional filter: fact | preference | project | decision | person | note.'),
+      limit: num('Optional maximum number of results (default 6).'),
+    }, ['query']),
+    APPROVAL.READ,
+    async (ctx, args) => {
+      const { searchMemory, markUsed, memoryStats } = await import('./memory.js');
+      const hits = searchMemory(String(args.query), { limit: args.limit || 6, kind: args.kind || '' });
+      if (!hits.length) {
+        const st = memoryStats();
+        return st.count
+          ? `No memories match "${args.query}" (${st.count} stored). Answer from the conversation, and use remember if the user states something durable.`
+          : 'Long-term memory is empty. Ask only if you genuinely need it, and use remember when the user states something durable.';
+      }
+      markUsed(hits.map((m) => m.id));
+      ctx.onMemory?.();
+      return hits.map((m) => `- (id: ${m.id}) [${m.kind}]${m.pinned ? ' (pinned)' : ''} ${m.text}${m.tags?.length ? ` #${m.tags.join(' #')}` : ''}`).join('\n');
+    }),
+
+  tool('forget',
+    'Delete a long-term memory. Use it when the user corrects something you had stored, asks to be forgotten, or when a memory is now wrong or obsolete.',
+    obj({
+      query: str('Which memory to remove — text or keywords identifying it.'),
+      id: str('Optional exact memory id. Required when several memories match equally — recall lists ids.'),
+    }),
+    APPROVAL.WRITE,
+    async (ctx, args) => {
+      const { removeMemory, bestMatch, memories } = await import('./memory.js');
+      // deleting is destructive, so an exact id always wins over a fuzzy query
+      if (args.id) {
+        const target = memories().find((m) => m.id === args.id);
+        if (!target) return `No memory has the id "${args.id}" — nothing deleted. Use recall to list ids.`;
+        removeMemory(target.id);
+        ctx.onMemory?.();
+        return `Forgot [${target.kind}] ${target.text}`;
+      }
+      const match = bestMatch(String(args.query || ''));
+      if (!match) return `No memory matched "${args.query}" — nothing deleted.`;
+      if (match.ambiguous) {
+        return `${match.ambiguous.length} memories match "${args.query}" about equally, so nothing was deleted. Ask the user which one, then call forget with its id:\n` +
+          match.ambiguous.map((m) => `- id: ${m.id} [${m.kind}] ${m.text}`).join('\n');
+      }
+      removeMemory(match.entry.id);
+      ctx.onMemory?.();
+      return `Forgot [${match.entry.kind}] ${match.entry.text}`;
+    }),
+
   tool('ask_user',
     'Ask the human a question and wait for the answer. Use it when a decision is genuinely ambiguous (repo name, visibility, design direction) — not for things you can decide yourself.',
     obj({

@@ -33,6 +33,7 @@ export function chatSystemPrompt(settings, ctx = {}) {
   if (ctx.model) extra.push(`Active model: ${ctx.model}`);
   if (ctx.date) extra.push(`Today's date: ${ctx.date}`);
   if (ctx.workspaceTree) extra.push(`The user's workspace currently contains:\n${truncate(ctx.workspaceTree, 3000)}`);
+  if (ctx.memory) extra.push(ctx.memory);
   return [base, extra.join('\n')].filter(Boolean).join('\n\n');
 }
 
@@ -79,6 +80,8 @@ ${toolsDoc(ctx.toolNames || null)}`,
   ];
 
   if (ctx.workspaceTree) parts.push(`## Current workspace\n\`\`\`\n${truncate(ctx.workspaceTree, 6000)}\n\`\`\``);
+  if (ctx.memory) parts.push(ctx.memory);
+  if (ctx.skills) parts.push(ctx.skills);
   return parts.filter(Boolean).join('\n\n');
 }
 
@@ -255,6 +258,16 @@ export async function runAgentTurn(o) {
   let tree = '';
   try { tree = isAgent ? await ws.treeText({ maxEntries: 200 }) : ''; } catch { /* ignore */ }
 
+  // long-term memory + skills are injected relative to what the user just asked
+  const lastUserText = [...(conv.messages || [])].reverse().find((m) => m.role === 'user');
+  const query = typeof lastUserText?.content === 'string' ? lastUserText.content : '';
+  let memoryBlock = '';
+  if (settings.memoryEnabled !== false) {
+    try {
+      const { memoryPromptBlock } = await import('./memory.js');
+      memoryBlock = memoryPromptBlock(query, { budgetChars: settings.memoryBudgetChars || 1600 });
+    } catch { /* memory is best-effort; never break a run over it */ }
+  }
   const creds = clientFromStorage();
   let workspaceDescription = `${ws.id} workspace`;
   try {
@@ -271,8 +284,12 @@ export async function runAgentTurn(o) {
       githubRepo: settings.githubRepo,
       date: new Date().toDateString(),
       protocol: useNative ? 'native' : 'text',
+      memory: memoryBlock || undefined,
     })
-    : chatSystemPrompt(settings, { model, date: new Date().toDateString(), workspaceTree: tree || undefined });
+    : chatSystemPrompt(settings, {
+      model, date: new Date().toDateString(), workspaceTree: tree || undefined,
+      memory: memoryBlock || undefined,
+    });
 
   const messages = [
     { role: 'system', content: system },
@@ -302,6 +319,8 @@ export async function runAgentTurn(o) {
     // media tools hand their result straight to the transcript; the bytes never
     // go back to the model (a base64 image in context would burn credits for nothing)
     onMedia: (m) => ui.onMedia?.(m),
+    onMemory: () => ui.onMemory?.(),
+    convId: conv?.id || null,
     onOutput: (level, text) => ui.onOutput?.(level, text),
     onProgress: (frac, label) => ui.onProgress?.(frac, label),
     touch: () => ui.onWorkspaceChanged?.(),

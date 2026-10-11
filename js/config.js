@@ -23,6 +23,10 @@ export const KEYS = {
   theme: 'pp.theme.v1',
   allowTools: 'pp.tools.allow.v1',
   seenSignInNote: 'pp.seenSignInNote.v1',
+  memory: 'pp.memory.v1',
+  connections: 'pp.connections.v1',
+  providers: 'pp.providers.v1',
+  skills: 'pp.skills.v1',
 };
 
 /** How long a cached model catalogue stays fresh (ms). */
@@ -54,6 +58,11 @@ export const DEFAULTS = {
   syncPuterKv: false,
   compactToolHistory: true,
   panelOpen: null,      // null = auto (open on wide screens, closed on narrow)
+  memoryEnabled: true,
+  memoryBudgetChars: 1600,
+  memorySync: false,     // mirror long-term memory into the user's Puter KV
+  memoryDistillModel: '',// '' = reuse the chat model
+  providerId: 'puter',   // active AI provider (see js/providers.js)
 };
 
 /**

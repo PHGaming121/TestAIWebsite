@@ -10,17 +10,19 @@ import {
   readStorage, writeStorage, hasOpfs, hasFsAccessApi, formatBytes,
 } from './util.js';
 import { state, loadState, updateSettings, newConversation, setActive, activeConversation, addMessage, updateMessage, removeMessage, deleteConversation, renameConversation, on, saveConversations, pullFromPuterKv } from './store.js';
-import { ensurePuter, shortModelName, puterUser } from './llm.js';
+import { ensurePuter, shortModelName, puterUser, complete as llmComplete } from './llm.js';
 import { runAgentTurn } from './agent.js';
 import { ChatView, renderStarters } from './chat.js';
 import { FilesPane, TermPane } from './panels.js';
 import { GitHubPane } from './github-pane.js';
 import { PublishPane } from './publish-pane.js';
 import { MediaPane } from './media-pane.js';
+import { MemoryPane } from './memory-pane.js';
 import { ModelPicker } from './modelpicker.js';
 import { openSettings } from './settings.js';
 import { icon, toast, openModal, confirmDialog, promptDialog, approvalDialog, askUserDialog } from './ui.js';
 import { createWorkspace, workspace, setWorkspace, onWorkspaceChange, pickDefaultBackend } from './workspace.js';
+import { pullMemoriesFromCloud, pushMemoriesToCloud } from './memory.js';
 
 /* ══════════════════════════ boot ══════════════════════════ */
 const app = {
@@ -111,6 +113,14 @@ async function boot() {
     openFile: (path) => { switchTab('files'); app.filesPane.open(path).catch(() => {}); },
   });
 
+  app.memPane = new MemoryPane({
+    container: $('#memory-pane'),
+    getSettings: () => state.settings,
+    updateSettings,
+    activeConv: () => activeConversation(),
+    complete: (messages, opts) => llmComplete(messages, opts),
+  });
+
   app.pubPane = new PublishPane({
     container: $('#pub-pane'), getWs: () => workspace(),
     state: {
@@ -137,6 +147,18 @@ async function boot() {
 
   // cross-device history
   if (state.settings.syncPuterKv) pullFromPuterKv().then((pulled) => { if (pulled) { renderConversations(); renderConversation(); } });
+
+  // cross-device long-term memory
+  if (state.settings.memorySync) {
+    pullMemoriesFromCloud()
+      .then((r) => {
+        if (r.added || r.updated) {
+          app.memPane?.refresh();
+          toast(`Memory: ${r.added} new, ${r.updated} updated from your Puter cloud`, { type: 'ok', timeout: 5000 });
+        }
+      })
+      .catch(() => { /* offline or signed out — local memory still works */ });
+  }
 
   // keep the settings object live for panes that captured it
   on('settings', (s) => {
@@ -292,6 +314,7 @@ function switchTab(name) {
   setPanelOpen(true);
   if (name === 'files') app.filesPane.refresh();
   if (name === 'create') app.mediaPane?.loadRefs();
+  if (name === 'memory') app.memPane?.refresh();
   if (name === 'github') app.ghPane.renderSide();
 }
 
@@ -619,6 +642,7 @@ async function runTurn(conv) {
     onWorkspaceChanged: () => { app.filesPane.refresh(); refreshWorkspaceMeta(); },
     askUser: (q, options) => askUserDialog(q, options),
     onMedia: (media) => { app.chatView.showMedia(activeConversation(), media); app.filesPane.refresh(); },
+    onMemory: () => { app.memPane?.refresh(); queueMemoryPush(); },
     requestApproval: (call) => approvalDialog(call),
     setRepo: (full) => app.ghPane?.setRepo(full),
   };
@@ -756,6 +780,12 @@ function buildWelcome() {
   });
 }
 
+/** Mirror memory into the user's Puter KV after changes (debounced, best-effort). */
+const queueMemoryPush = debounce(() => {
+  if (!state.settings.memorySync) return;
+  pushMemoriesToCloud().catch(() => { /* signed out or offline */ });
+}, 1200);
+
 /* ══════════════════════════ puter account ══════════════════════════ */
 
 /**
@@ -812,6 +842,10 @@ async function puterSignIn() {
     await refreshUserButton();
     toast('Signed in to Puter', { type: 'ok' });
     if (state.settings.backend === 'puter') await initWorkspace('puter');
+    // only touch the cloud mirror when the user actually switched it on
+    if (state.settings.memorySync) {
+      pushMemoriesToCloud().catch(() => {});
+    }
   } catch (e) { toast(prettyError(e), { type: 'err' }); }
 }
 

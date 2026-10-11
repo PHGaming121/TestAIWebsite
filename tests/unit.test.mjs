@@ -320,5 +320,122 @@ try { await M.generateVideo({ prompt: 'x' }); } catch (e) { threw = /txt2vid/.te
 w.puter.ai.txt2vid = noVid;
 ok('clear error when the driver is missing', threw);
 
+/* ══════ long-term memory ══════ */
+const MEM = await import(`${ROOT}/memory.js`);
+w.puter.kv = {
+  _s: new Map(),
+  async set(k, v) { this._s.set(k, v); return true; },
+  async get(k) { return this._s.get(k) ?? null; },
+  async del(k) { this._s.delete(k); },
+};
+MEM.clearMemories();
+
+section('memory: storage');
+const m1 = MEM.addMemory({ text: 'The user prefers plain JavaScript over TypeScript.', kind: 'preference', tags: ['js', 'style'] });
+ok('adds a memory with an id and kind', m1.entry.id && m1.entry.kind === 'preference' && m1.deduped === false);
+ok('tags are normalised', m1.entry.tags.join(',') === 'js,style');
+const m2 = MEM.addMemory({ text: 'The user prefers plain JavaScript over TypeScript!', kind: 'note' });
+ok('near-duplicate text updates instead of piling up', m2.deduped === true && MEM.memories().length === 1);
+MEM.addMemory({ text: 'Their main project is TestAIWebsite, a static Puter playground.', kind: 'project', tags: ['repo'] });
+MEM.addMemory({ text: 'Deploys go to GitHub Pages, never to a paid host.', kind: 'decision' });
+MEM.addMemory({ text: 'The user lives in São Paulo and works in America/Sao_Paulo.', kind: 'fact' });
+ok('persists to localStorage', JSON.parse(w.localStorage.getItem('pp.memory.v1')).length === 4);
+ok('stats count by kind', MEM.memoryStats().count === 4 && MEM.memoryStats().byKind.find((k) => k.id === 'project').n === 1);
+let thrown = false;
+try { MEM.addMemory({ text: '   ' }); } catch { thrown = true; }
+ok('rejects an empty memory', thrown);
+thrown = false;
+try { MEM.addMemory({ text: 'x'.repeat(5000) }); } catch { thrown = true; }
+ok('rejects an absurdly long memory', thrown);
+const unknownKind = MEM.addMemory({ text: 'Something with a bogus kind.', kind: 'nonsense' });
+ok('unknown kinds fall back to note', unknownKind.entry.kind === 'note');
+MEM.removeMemory(unknownKind.entry.id);
+
+section('memory: retrieval');
+const byPhrase = MEM.searchMemory('javascript typescript');
+ok('ranks the matching preference first', byPhrase[0]?.text.includes('JavaScript'), byPhrase[0]?.text);
+const byTag = MEM.searchMemory('repo');
+ok('finds by tag', byTag.some((m) => m.tags?.includes('repo')));
+const byProject = MEM.searchMemory('what am i building');
+ok('unrelated queries do not match everything', MEM.searchMemory('quantum chromodynamics').length === 0);
+ok('project memory is retrievable', MEM.searchMemory('TestAIWebsite playground')[0]?.kind === 'project');
+const pinned = MEM.memories().find((m) => m.kind === 'fact');
+MEM.updateMemory(pinned.id, { pinned: true });
+ok('pinning works', MEM.memories().find((m) => m.id === pinned.id).pinned === true);
+ok('pinned memories surface with an empty query', MEM.searchMemory('', { limit: 3 }).some((m) => m.pinned));
+MEM.updateMemory(pinned.id, { text: 'The user lives in São Paulo, Brazil (America/Sao_Paulo).' });
+ok('editing keeps the id and bumps updatedAt', MEM.memories().find((m) => m.id === pinned.id).text.includes('Brazil'));
+ok('removeMemory reports misses', MEM.removeMemory('mem_nope') === false);
+MEM.markUsed([pinned.id]);
+ok('markUsed counts hits', MEM.memories().find((m) => m.id === pinned.id).hits === 1);
+
+section('memory: prompt injection');
+const block = MEM.memoryPromptBlock('do you remember my language preference?');
+ok('block has a header', block.startsWith('## Long-term memory'), block.slice(0, 60));
+ok('block contains the relevant memory', /JavaScript/.test(block));
+ok('block tells the model not to invent memories', /Never invent memories/.test(block));
+ok('pinned memory is always included', /São Paulo/.test(MEM.memoryPromptBlock('something totally unrelated')));
+ok('respects the character budget', MEM.memoryPromptBlock('javascript', { budgetChars: 60 }).length < 400);
+ok('empty store injects nothing', (() => { MEM.clearMemories(); const b = MEM.memoryPromptBlock('anything'); MEM.mergeMemories([{ text: 'x' }]); MEM.clearMemories(); return b === ''; })());
+MEM.clearMemories();
+MEM.addMemory({ text: 'The user prefers plain JavaScript over TypeScript.', kind: 'preference' });
+MEM.addMemory({ text: 'Their main project is TestAIWebsite.', kind: 'project' });
+
+section('memory: cloud mirror + merge');
+const pushed = await MEM.pushMemoriesToCloud();
+ok('push reports the count', pushed === 2);
+MEM.clearMemories();
+const pulled = await MEM.pullMemoriesFromCloud();
+ok('pull restores what was pushed', pulled.added === 2 && MEM.memories().length === 2);
+const merged = MEM.mergeMemories([
+  { text: 'The user prefers plain JavaScript over TypeScript.', updatedAt: 1 },          // older dupe → ignored
+  { text: 'Their main project is TestAIWebsite.', updatedAt: Date.now() + 5000, tags: ['repo'] }, // newer → updated
+  { text: 'The user answers in British English.', kind: 'preference' },                  // new
+]);
+ok('merge adds new entries', merged.added === 1);
+ok('merge updates newer copies', merged.updated === 1);
+ok('merge ignores stale duplicates', MEM.memories().length === 3);
+ok('merged tags are unioned', MEM.memories().find((m) => m.text.includes('TestAIWebsite')).tags.includes('repo'));
+
+section('memory: distillation');
+const cands = MEM.parseCandidates('[{"text":"The user likes dark themes.","kind":"preference","tags":["ui"]}]');
+ok('parses a bare JSON array', cands.length === 1 && cands[0].kind === 'preference' && cands[0].tags[0] === 'ui');
+ok('parses a fenced array', MEM.parseCandidates('Sure!\n```json\n[{"text":"A fact worth keeping."}]\n```').length === 1);
+ok('parses an array wrapped in prose', MEM.parseCandidates('Here you go: [{"text":"Prose wrapped."}] hope that helps').length === 1);
+ok('rejects garbage', MEM.parseCandidates('not json at all').length === 0 && MEM.parseCandidates('').length === 0);
+ok('drops entries that are already stored', MEM.parseCandidates('[{"text":"The user prefers plain JavaScript over TypeScript."}]').length === 0);
+ok('drops malformed items', MEM.parseCandidates('[{"kind":"note"},null,{"text":"ok one"}]').length === 1);
+ok('clamps runaway output', MEM.parseCandidates(JSON.stringify(Array.from({ length: 60 }, (_, i) => ({ text: `fact ${i}` })))).length === 25);
+thrown = false;
+try { await MEM.distillConversation({ messages: [] }, { complete: async () => '[]' }); } catch { thrown = true; }
+ok('refuses to distil an empty conversation', thrown);
+thrown = false;
+try { await MEM.distillConversation({ messages: [{ role: 'user', content: 'hi' }] }, {}); } catch { thrown = true; }
+ok('needs a completion function', thrown);
+const calls = [];
+const distilled = await MEM.distillConversation(
+  { messages: [{ role: 'user', content: 'I always ship to GitHub Pages.' }, { role: 'assistant', content: 'Noted.' }, { role: 'tool', content: 'ignored' }] },
+  { complete: async (msgs, opts) => { calls.push({ msgs, opts }); return '[{"text":"The user ships to GitHub Pages.","kind":"decision","tags":["deploy"]}]'; }, model: 'gpt-5.4-nano' },
+);
+ok('distil returns candidates', distilled.length === 1 && distilled[0].text.includes('GitHub Pages'));
+ok('distil sends the transcript, not tool noise', calls[0].msgs[1].content.includes('I always ship') && !calls[0].msgs[1].content.includes('ignored'));
+ok('distil asks for a low temperature and the chosen model', calls[0].opts.temperature === 0.1 && calls[0].opts.model === 'gpt-5.4-nano');
+ok('distil instructs against storing secrets', /secrets|API keys/i.test(calls[0].msgs[0].content));
+
+section('memory: targeting for destructive ops');
+MEM.clearMemories();
+const keep = MEM.addMemory({ text: 'The user ships everything to GitHub Pages.', kind: 'decision' }).entry;
+MEM.addMemory({ text: 'The user lives in São Paulo.', kind: 'fact', pinned: true });
+MEM.addMemory({ text: 'The user prefers tabs over spaces in editor configs.', kind: 'preference' });
+ok('bestMatch finds the lexical match', MEM.bestMatch('GitHub Pages deployment').entry.id === keep.id);
+ok('a pinned memory does not hijack an unrelated match', MEM.bestMatch('GitHub Pages').entry.text.includes('GitHub Pages'));
+ok('bestMatch returns null when nothing matches', MEM.bestMatch('zzz qqq') === null);
+const amb = MEM.bestMatch('user');
+ok('ambiguous queries are reported, not guessed', !!amb?.ambiguous && amb.ambiguous.length >= 2, String(amb?.ambiguous?.length));
+ok('rankedSearch exposes scores', MEM.rankedSearch('GitHub Pages')[0].lex > 0);
+ok('stem matching links related words', MEM.bestMatch('shipping the site')?.entry.text.includes('GitHub Pages') === true, JSON.stringify(MEM.bestMatch('shipping the site')));
+ok('stem matching links deploy → deployment', (MEM.clearMemories(), MEM.addMemory({ text: 'The user deploys to GitHub Pages only.', kind: 'decision' }), MEM.bestMatch('deployment target')?.entry.text.includes('deploys') === true));
+
+
 console.log(`\n═══ ${pass} passed, ${fail} failed ═══`);
 process.exit(fail ? 1 : 0);
