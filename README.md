@@ -95,15 +95,12 @@ Skill content is workspace data, not user chat. It is wrapped in `<skill …>` /
 
 If `https://<owner>.github.io/<repository>/` answers with GitHub's *"There isn't a GitHub Pages site here"* page, Pages is not enabled for the repository, so the Forge files are never served. The deploy workflow failed at the `Configure Pages` step when this was last checked.
 
-The workflow now handles what it can by itself: it tries to create the Pages site (`enablement: true`), and when the workflow token is not allowed to do that it publishes the same files to a `gh-pages` branch — which is what happened on this repository, so **`gh-pages` already contains the built site**. One setting is still manual, because creating a Pages site needs repository admin rights that an Actions token does not have:
+The workflow now handles this itself. It asks GitHub to create the Pages site (`enablement: true`), which is what fixed this repository — the site is live at <https://phgaming121.github.io/TestAIWebsite/> and deploys on every push to `main`. If a future token is not allowed to create the site, the same run publishes the identical files to a `gh-pages` branch instead, keeps the run green, and puts the two settings to change in the run summary:
 
 1. **Settings → Pages → Build and deployment → Source: Deploy from a branch**.
 2. Branch: **`gh-pages`**, folder: **`/ (root)`** → **Save**.
-3. Wait for the first build (about a minute) and open `https://<owner>.github.io/<repository>/`.
 
-Once the site is live, every push to `main` refreshes it: the workflow rebuilds, checks the files, and force-pushes the fresh copy to `gh-pages`. If you later switch the source to **GitHub Actions**, the same workflow deploys directly and skips the branch publish.
-
-Either way the run no longer fails: when the Actions deploy is unavailable the summary says so and points at the same two settings.
+To check which path a run took, open **Actions → Deploy Forge to GitHub Pages**: a green *Deploy to GitHub Pages* job means the Actions source is in use; the *Fallback publish to gh-pages* job only runs when it is not.
 
 ### "I can't sign in" — the CodeCraft browser check
 
