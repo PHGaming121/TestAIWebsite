@@ -95,13 +95,15 @@ Skill content is workspace data, not user chat. It is wrapped in `<skill …>` /
 
 If `https://<owner>.github.io/<repository>/` answers with GitHub's *"There isn't a GitHub Pages site here"* page, Pages is not enabled for the repository, so the Forge files are never served. The deploy workflow failed at the `Configure Pages` step when this was last checked.
 
-The workflow now handles that itself: it passes `enablement: true` so the Pages site is created automatically, and if that is refused it publishes the exact same files to a `gh-pages` branch and writes the one manual step into the run summary. To finish the job by hand:
+The workflow now handles what it can by itself: it tries to create the Pages site (`enablement: true`), and when the workflow token is not allowed to do that it publishes the same files to a `gh-pages` branch — which is what happened on this repository, so **`gh-pages` already contains the built site**. One setting is still manual, because creating a Pages site needs repository admin rights that an Actions token does not have:
 
-1. **Settings → Pages → Build and deployment → Source: GitHub Actions**, then Save.
-2. **Actions → Deploy Forge to GitHub Pages → Run workflow** (or merge to `main`).
-3. Confirm the run's *Deploy* job shows the published URL, then open it.
+1. **Settings → Pages → Build and deployment → Source: Deploy from a branch**.
+2. Branch: **`gh-pages`**, folder: **`/ (root)`** → **Save**.
+3. Wait for the first build (about a minute) and open `https://<owner>.github.io/<repository>/`.
 
-If step 1 has to be *Deploy from a branch* instead, choose the `gh-pages` branch and `/ (root)` — the fallback job keeps that branch up to date.
+Once the site is live, every push to `main` refreshes it: the workflow rebuilds, checks the files, and force-pushes the fresh copy to `gh-pages`. If you later switch the source to **GitHub Actions**, the same workflow deploys directly and skips the branch publish.
+
+Either way the run no longer fails: when the Actions deploy is unavailable the summary says so and points at the same two settings.
 
 ### "I can't sign in" — the CodeCraft browser check
 
