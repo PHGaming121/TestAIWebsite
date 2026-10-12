@@ -3,6 +3,12 @@
 
   const API_BASE = 'https://codecraftapi.com/v1';
   const GITHUB_API = 'https://api.github.com';
+  const SETTINGS_KEY = 'forge.settings.v1';
+  const DOCS_URL = 'https://codecraftapi.com/docs';
+  const LOGIN_URL = 'https://codecraftapi.com/login';
+  const DASHBOARD_URL = 'https://codecraftapi.com/dashboard';
+  const COMPRESSOR = window.ForgeCompressor || null;
+  const SKILLS = window.ForgeSkills || null;
   const FALLBACK_MODEL = 'claude-opus-4.8';
   const MAX_FILE_BYTES = 180_000;
   const MAX_WORKSPACE_FILES = 140;
@@ -94,7 +100,29 @@
     sending: false,
     pendingApproval: null,
     rateLimitText: 'Provider limits and pricing apply',
-    toastTimer: null
+    toastTimer: null,
+    apiBase: API_BASE,
+    // Token saver. `seen` dedupes repeated file reads inside one session.
+    saver: {
+      profile: 'balanced',
+      keepRecentTurns: 2,
+      compactCurrentTurnFiles: true,
+      pruneOldPayloads: true,
+      compactToolSchemas: true,
+      targetTokens: 0,
+      seen: new Map(),
+      totals: { runs: 0, tokensBefore: 0, tokensAfter: 0, saved: 0, lastReport: null, lastLabel: '' }
+    },
+    // Claude skill data discovered from the workspace or added by hand.
+    skills: {
+      registry: { skills: [], memory: [], commands: [], agents: [], warnings: [], total: 0, errorCount: 0 },
+      manual: [],
+      override: new Map(),
+      contextKey: '',
+      context: '',
+      lastTokens: 0
+    },
+    diagnostics: { results: [], running: false, finishedAt: 0, base: '' }
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -111,7 +139,22 @@
     apiDialog: $('#apiDialog'), apiForm: $('#apiForm'), apiKeyInput: $('#apiKeyInput'), apiFormError: $('#apiFormError'), saveApiButton: $('#saveApiButton'), revealApiKeyButton: $('#revealApiKeyButton'),
     githubDialog: $('#githubDialog'), githubForm: $('#githubForm'), githubRepoInput: $('#githubRepoInput'), githubBranchInput: $('#githubBranchInput'), githubTokenInput: $('#githubTokenInput'), githubFormError: $('#githubFormError'), connectGithubSubmit: $('#connectGithubSubmit'),
     writeDialog: $('#writeDialog'), writeDialogDescription: $('#writeDialogDescription'), writeFilePath: $('#writeFilePath'), writeLineCount: $('#writeLineCount'), writePreview: $('#writePreview'), approveWriteButton: $('#approveWriteButton'), denyWriteButton: $('#denyWriteButton'),
-    fileDialog: $('#fileDialog'), fileDialogPath: $('#fileDialogPath'), filePreviewCode: $('#filePreviewCode'), copyFileButton: $('#copyFileButton'), toastRegion: $('#toastRegion'), mobileMenuButton: $('#mobileMenuButton'), inspectorMenuButton: $('#inspectorMenuButton')
+    fileDialog: $('#fileDialog'), fileDialogPath: $('#fileDialogPath'), filePreviewCode: $('#filePreviewCode'), copyFileButton: $('#copyFileButton'), toastRegion: $('#toastRegion'), mobileMenuButton: $('#mobileMenuButton'), inspectorMenuButton: $('#inspectorMenuButton'),
+    // Token saver
+    saverChip: $('#saverChip'), saverChipLabel: $('#saverChipLabel'), saverChipSaving: $('#saverChipSaving'), saverBadge: $('#saverBadge'), saverHeadline: $('#saverHeadline'), saverSub: $('#saverSub'),
+    saverMeterFill: $('#saverMeterFill'), saverSent: $('#saverSent'), saverSaved: $('#saverSaved'), saverRuns: $('#saverRuns'), saverOpenButton: $('#saverOpenButton'),
+    saverDialog: $('#saverDialog'), profileGrid: $('#profileGrid'), saverCurrentTurnToggle: $('#saverCurrentTurnToggle'), saverPruneToggle: $('#saverPruneToggle'), saverSchemaToggle: $('#saverSchemaToggle'),
+    saverTurnsSelect: $('#saverTurnsSelect'), saverBudgetInput: $('#saverBudgetInput'), saverReport: $('#saverReport'), saverReportTitle: $('#saverReportTitle'), saverReportMeta: $('#saverReportMeta'),
+    saverReportMeter: $('#saverReportMeter'), techniqueTable: $('#techniqueTable'), saverPreviewButton: $('#saverPreviewButton'), saverBenchmarkButton: $('#saverBenchmarkButton'), saverResetButton: $('#saverResetButton'), saverFootnote: $('#saverFootnote'),
+    // Skills
+    skillsBadge: $('#skillsBadge'), skillsHeadline: $('#skillsHeadline'), skillsSub: $('#skillsSub'), skillMiniList: $('#skillMiniList'), skillsOpenButton: $('#skillsOpenButton'),
+    skillsDialog: $('#skillsDialog'), skillsList: $('#skillsList'), skillsCount: $('#skillsCount'), skillsRescanButton: $('#skillsRescanButton'), skillsAddFileButton: $('#skillsAddFileButton'),
+    skillsPasteButton: $('#skillsPasteButton'), skillsTemplateButton: $('#skillsTemplateButton'), skillFileInput: $('#skillFileInput'), skillEditor: $('#skillEditor'), skillNameInput: $('#skillNameInput'),
+    skillBodyInput: $('#skillBodyInput'), skillEditorSave: $('#skillEditorSave'), skillEditorCancel: $('#skillEditorCancel'), skillEditorError: $('#skillEditorError'),
+    // Connection doctor + environment banner
+    doctorDialog: $('#doctorDialog'), doctorRunButton: $('#doctorRunButton'), doctorStatus: $('#doctorStatus'), doctorResults: $('#doctorResults'), doctorCopyButton: $('#doctorCopyButton'), doctorSteps: $('#doctorSteps'),
+    openCodecraftLoginButton: $('#openCodecraftLoginButton'), apiBaseInput: $('#apiBaseInput'), runDoctorButton: $('#runDoctorButton'),
+    envBanner: $('#envBanner'), envBannerText: $('#envBannerText'), envBannerClose: $('#envBannerClose')
   };
 
   function escapeHtml(value) {
@@ -144,7 +187,7 @@
 
   function friendlyFetchError(error, service) {
     if (error?.name === 'AbortError') return 'Request cancelled.';
-    if (error instanceof TypeError) return `Could not reach ${service}. Check your connection, and confirm the API allows browser requests (CORS).`;
+    if (error instanceof TypeError || error?.name === 'TypeError') return `Could not reach ${service}. Check your connection, and confirm the API allows browser requests (CORS).`;
     return error?.message || `Something went wrong while contacting ${service}.`;
   }
 
@@ -227,7 +270,7 @@
   async function fetchModels(apiKey) {
     let response;
     try {
-      response = await fetch(`${API_BASE}/models`, {
+      response = await fetch(`${state.apiBase}/models`, {
         headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
         cache: 'no-store'
       });
@@ -244,6 +287,7 @@
 
   function openApiDialog() {
     setFormError(dom.apiFormError, '');
+    if (dom.apiBaseInput) dom.apiBaseInput.value = state.apiBase;
     dom.apiKeyInput.value = '';
     dom.apiKeyInput.placeholder = state.apiKey ? 'Connected for this tab — enter a new key to replace' : 'cc_••••••••••••••••';
     dom.apiKeyInput.type = 'password';
@@ -256,6 +300,19 @@
   async function handleApiFormSubmit(event) {
     event.preventDefault();
     setFormError(dom.apiFormError, '');
+    if (dom.apiBaseInput) {
+      const normalized = normalizeApiBase(dom.apiBaseInput.value);
+      if (normalized.error) {
+        setFormError(dom.apiFormError, normalized.error);
+        return;
+      }
+      if (normalized.value !== state.apiBase) {
+        state.apiBase = normalized.value;
+        saveSettings();
+        state.models = [];
+        showToast(`API base set to ${state.apiBase}.`);
+      }
+    }
     const candidate = dom.apiKeyInput.value.trim() || state.apiKey;
     if (!candidate) {
       setFormError(dom.apiFormError, 'Paste a CodeCraft API key to continue.');
@@ -274,15 +331,149 @@
       showToast(`Connected to CodeCraft. ${models.length} models loaded.`);
     } catch (error) {
       setApiConnected(Boolean(state.apiKey), state.apiKey ? '' : 'error');
-      setFormError(dom.apiFormError, friendlyFetchError(error, 'CodeCraft API'));
+      const base = friendlyFetchError(error, 'CodeCraft API');
+      setFormError(dom.apiFormError, `${base}${error instanceof TypeError ? ' Open the Connection doctor for the exact reason — a browser check, a blocker or an offline network all look like this.' : ''}`);
     } finally {
       dom.saveApiButton.disabled = false;
       dom.saveApiButton.innerHTML = 'Save &amp; test <span>↗</span>';
     }
   }
 
+  /* ---------------------------------------------------------------------- *
+   * Settings (non-secret only; API keys are never persisted)
+   * ---------------------------------------------------------------------- */
+
+  function loadSettings() {
+    let stored = null;
+    try { stored = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || 'null'); } catch (_) { stored = null; }
+    if (!stored || typeof stored !== 'object') return;
+    if (typeof stored.apiBase === 'string' && stored.apiBase) state.apiBase = stored.apiBase;
+    const saver = stored.saver;
+    if (saver && typeof saver === 'object') {
+      if (COMPRESSOR && COMPRESSOR.PROFILES[saver.profile]) state.saver.profile = saver.profile;
+      if (Number.isFinite(Number(saver.keepRecentTurns))) state.saver.keepRecentTurns = Math.max(1, Math.min(6, Number(saver.keepRecentTurns)));
+      if (typeof saver.compactCurrentTurnFiles === 'boolean') state.saver.compactCurrentTurnFiles = saver.compactCurrentTurnFiles;
+      if (typeof saver.pruneOldPayloads === 'boolean') state.saver.pruneOldPayloads = saver.pruneOldPayloads;
+      if (typeof saver.compactToolSchemas === 'boolean') state.saver.compactToolSchemas = saver.compactToolSchemas;
+      if (Number.isFinite(Number(saver.targetTokens))) state.saver.targetTokens = Math.max(0, Number(saver.targetTokens));
+    }
+  }
+
+  function saveSettings() {
+    try {
+      window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+        apiBase: state.apiBase,
+        saver: {
+          profile: state.saver.profile,
+          keepRecentTurns: state.saver.keepRecentTurns,
+          compactCurrentTurnFiles: state.saver.compactCurrentTurnFiles,
+          pruneOldPayloads: state.saver.pruneOldPayloads,
+          compactToolSchemas: state.saver.compactToolSchemas,
+          targetTokens: state.saver.targetTokens
+        }
+      }));
+    } catch (_) { /* private mode or storage disabled */ }
+  }
+
+  function normalizeApiBase(value) {
+    const raw = String(value || '').trim().replace(/\/+$/, '');
+    if (!raw) return { value: API_BASE, error: '' };
+    let url;
+    try { url = new URL(raw.includes('://') ? raw : `https://${raw}`); } catch (_) { return { value: state.apiBase, error: 'That does not look like a valid URL.' }; }
+    const localHost = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && localHost)) {
+      return { value: state.apiBase, error: 'Use https:// (plain http is only allowed for localhost gateways).' };
+    }
+    const path = url.pathname.replace(/\/+$/, '');
+    if (!path || path === '/') url.pathname = '/v1';
+    return { value: url.origin + url.pathname.replace(/\/+$/, ''), error: '' };
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Claude skills: discovery, context, tools
+   * ---------------------------------------------------------------------- */
+
+  function skillEntries() {
+    const registry = state.skills.registry;
+    return [...(registry.skills || []), ...(registry.memory || []), ...(registry.commands || []), ...(registry.agents || [])];
+  }
+
+  /** Discover skills from the workspace, merge manual ones, apply toggles. */
+  function refreshSkills(options = {}) {
+    if (!SKILLS) return state.skills.registry;
+    const discovered = SKILLS.discover(state.files);
+    const manual = state.skills.manual.map(entry => {
+      const classification = SKILLS.classify(entry.path, entry.content) || { kind: 'skill', format: 'skill-md' };
+      const record = SKILLS.buildRecord(entry.path, entry.content, classification);
+      const validation = SKILLS.validate(record);
+      record.errors = validation.errors;
+      record.warnings = validation.warnings;
+      record.valid = validation.valid;
+      record.manual = true;
+      return record;
+    });
+    discovered.skills = [...discovered.skills, ...manual].sort((a, b) => a.name.localeCompare(b.name));
+    discovered.total += manual.length;
+    discovered.errorCount += manual.reduce((sum, item) => sum + item.errors.length, 0);
+    for (const record of skillEntries()) {
+      const override = state.skills.override.get(record.path);
+      record.enabled = override === undefined ? true : override;
+    }
+    state.skills.registry = discovered;
+    state.skills.contextKey = '';
+    if (options.silent !== true) renderSkillsPanel();
+    if (options.toast) {
+      const total = discovered.total;
+      showToast(total ? `Loaded ${total} Claude markdown entr${total === 1 ? 'y' : 'ies'} into the model context.` : 'No CLAUDE.md or SKILL.md files found in this workspace.');
+    }
+    return discovered;
+  }
+
+  /** Build (and cache) the skills/memory block that rides in the system message. */
+  function skillsContextBlock(mode = state.mode) {
+    if (!SKILLS) return '';
+    const registry = state.skills.registry;
+    if (!registry.total) {
+      state.skills.context = '';
+      state.skills.lastTokens = 0;
+      return '';
+    }
+    const key = [mode, registry.total, registry.errorCount, [...state.skills.override.entries()].join('|'), state.skills.manual.length, state.skills.registry.discoveredAt].join('::');
+    if (key === state.skills.contextKey && state.skills.context) return state.skills.context;
+    const built = SKILLS.buildContext(registry, {
+      canLoadSkillFiles: mode === 'agent',
+      inlineSkillBodyChars: mode === 'agent' ? 0 : 1400,
+      memoryBudgetChars: 12000
+    });
+    // Instruction files are compressed with the lossless profile: whitespace
+    // only, so nothing the project owner wrote can be reworded.
+    const memorySafe = COMPRESSOR && built.text
+      ? COMPRESSOR.compressText(built.text, { profile: 'safe' })
+      : null;
+    state.skills.context = memorySafe?.text || built.text;
+    state.skills.lastTokens = COMPRESSOR ? COMPRESSOR.estimateTokens(state.skills.context) : built.report.tokens;
+    state.skills.rawContextChars = built.text.length;
+    state.skills.contextChars = state.skills.context.length;
+    state.skills.rawTokens = COMPRESSOR ? COMPRESSOR.estimateTokens(built.text) : built.report.tokens;
+    state.skills.contextKey = key;
+    return state.skills.context;
+  }
+
   function getSystemMessage(mode = state.mode) {
-    return { role: 'system', content: mode === 'agent' ? AGENT_SYSTEM : CHAT_SYSTEM };
+    const base = mode === 'agent' ? AGENT_SYSTEM : CHAT_SYSTEM;
+    const skills = skillsContextBlock(mode);
+    const content = skills ? `${base}\n\n${skills}` : base;
+    return { role: 'system', content };
+  }
+
+  /** Base tools plus the skill tools, only when there is something to load. */
+  function currentToolDefinitions() {
+    if (!SKILLS || !state.skills.registry.total) return TOOL_DEFINITIONS;
+    const extras = SKILLS.TOOL_DEFINITIONS.filter(tool => {
+      if (tool.function.name === 'read_skill_resource') return state.skills.registry.skills.some(record => record.enabled !== false && record.resources.length);
+      return true;
+    });
+    return [...TOOL_DEFINITIONS, ...extras];
   }
 
   function ensureSession() {
@@ -346,6 +537,7 @@
 
   function newSession() {
     if (state.sending) stopGeneration();
+    state.saver.seen = new Map();
     state.currentSession = null;
     dom.messageList.replaceChildren();
     dom.messageList.hidden = true;
@@ -374,7 +566,7 @@
     dom.modeHint.textContent = mode === 'agent' ? 'AGENT' : 'CHAT';
     dom.modeHint.classList.toggle('agent-mode', mode === 'agent');
     dom.promptInput.placeholder = mode === 'agent'
-      ? 'Describe a task for the agent…'
+      ? (state.skills.registry.total ? 'Describe a task — project skills are loaded…' : 'Describe a task for the agent…')
       : 'Ask a question or describe what you want to build…';
     const quickPrompts = $$('.quick-prompts button');
     quickPrompts.forEach(button => {
@@ -382,7 +574,7 @@
       else button.removeAttribute('title');
     });
     if (state.currentSession) syncSessionSystem(state.currentSession);
-    if (mode === 'agent' && !state.workspace.filesCount && state.workspace.kind === 'none') {
+    if (mode === 'agent' && state.workspace.kind === 'none') {
       dom.workspaceFooterStatus.textContent = 'Connect a workspace for file tools';
     } else if (state.workspace.kind === 'none') {
       dom.workspaceFooterStatus.textContent = 'Ready when you are';
@@ -390,7 +582,7 @@
   }
 
   function addEntry(session, role, text = '') {
-    const entry = { id: `entry-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, role, text, activities: [], pending: role === 'assistant', error: '', element: null, sessionId: session.id };
+    const entry = { id: `entry-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, role, text, activities: [], pending: role === 'assistant', error: '', element: null, sessionId: session.id, report: null };
     session.entries.push(entry);
     session.updatedAt = Date.now();
     if (session === state.currentSession) {
@@ -469,6 +661,28 @@
       error.textContent = entry.error;
       content.append(error);
     }
+    const meta = $('.message-meta', existingRow);
+    if (meta) {
+      meta.querySelectorAll('.meta-chip').forEach(node => node.remove());
+      if (entry.report && entry.report.savedTokens > 0) {
+        const chip = document.createElement('span');
+        chip.className = `meta-chip${entry.report.lossy ? ' is-lossy' : ''}`;
+        chip.textContent = `−${entry.report.savedPct}% · ${entry.report.savedTokens.toLocaleString()} tokens saved`;
+        chip.title = [
+          `${entry.report.profileLabel} profile`,
+          `${entry.report.tokensBefore.toLocaleString()} → ${entry.report.tokensAfter.toLocaleString()} input tokens`,
+          ...(entry.report.techniques || []).map(item => `${item.label}: ${item.tokens.toLocaleString()} tokens`)
+        ].join('\n');
+        meta.append(chip);
+      }
+      if (entry.role === 'assistant' && state.skills.registry.total) {
+        const skillChip = document.createElement('span');
+        skillChip.className = 'meta-chip is-muted';
+        skillChip.textContent = `${state.skills.registry.total} Claude file${state.skills.registry.total === 1 ? '' : 's'} in context`;
+        skillChip.title = 'CLAUDE.md / SKILL.md data loaded into the system message for this request.';
+        meta.append(skillChip);
+      }
+    }
     activityList.replaceChildren();
     for (const message of entry.activities) {
       const item = document.createElement('div');
@@ -480,6 +694,21 @@
       activityList.append(item);
     }
     if (entry.sessionId === state.currentSession?.id) scrollToBottom(false);
+  }
+
+  function applyReportToEntry(entry, report) {
+    if (!report || report.profile === 'off') return;
+    const current = entry.report || { tokensBefore: 0, tokensAfter: 0, savedTokens: 0, savedPct: 0, runs: 0, techniques: [], lossy: false, profileLabel: report.profileLabel };
+    current.tokensBefore += report.tokensBefore;
+    current.tokensAfter += report.tokensAfter;
+    current.savedTokens += report.savedTokens;
+    current.runs += 1;
+    current.lossy = current.lossy || report.lossy;
+    current.profileLabel = report.profileLabel;
+    current.savedPct = current.tokensBefore ? Math.round((current.savedTokens / current.tokensBefore) * 1000) / 10 : 0;
+    current.techniques = report.techniques || [];
+    entry.report = current;
+    if (entry.element) updateMessageRow(entry);
   }
 
   function addActivity(entry, message) {
@@ -700,22 +929,80 @@
     }
   }
 
+  /** Run the outbound payload through the token saver and record the result. */
+  function compressRequest({ messages, tools }) {
+    const saver = state.saver;
+    if (!COMPRESSOR || saver.profile === 'off') {
+      return { messages, tools, report: COMPRESSOR ? COMPRESSOR.compressMessages(messages, { profile: 'off' }).report : null };
+    }
+    const prepared = COMPRESSOR.prepareRequest({
+      messages,
+      tools,
+      options: {
+        profile: saver.profile,
+        keepRecentTurns: saver.keepRecentTurns,
+        compactCurrentTurnFiles: saver.compactCurrentTurnFiles,
+        pruneOldPayloads: saver.pruneOldPayloads,
+        compactToolSchemas: saver.compactToolSchemas,
+        targetTokens: saver.targetTokens
+      }
+    });
+    // The system message is sent verbatim (it holds the instructions), but the
+    // skill/instruction block itself was already compacted when it was built.
+    // Attribute that measured saving to this request too.
+    const skillTokens = (state.skills.rawTokens || 0) - (state.skills.lastTokens || 0);
+    if (skillTokens > 0 && prepared.report) {
+      prepared.report.tokensBefore += skillTokens;
+      prepared.report.savedTokens = prepared.report.tokensBefore - prepared.report.tokensAfter;
+      prepared.report.savedPct = prepared.report.tokensBefore
+        ? Math.round((prepared.report.savedTokens / prepared.report.tokensBefore) * 1000) / 10
+        : 0;
+      prepared.report.techniques = [{
+        id: 'skills-context',
+        label: 'Instruction + skill block compaction',
+        lossy: false,
+        chars: (state.skills.rawContextChars || 0) - (state.skills.contextChars || 0),
+        tokens: skillTokens,
+        hits: 1,
+        detail: 'workspace markdown compared with the compacted copy that went into the system message'
+      }, ...prepared.report.techniques];
+    }
+    recordSaverReport(prepared.report);
+    return prepared;
+  }
+
+  function recordSaverReport(report) {
+    if (!report) return;
+    const totals = state.saver.totals;
+    totals.runs += 1;
+    totals.tokensBefore += report.tokensBefore;
+    totals.tokensAfter += report.tokensAfter;
+    totals.saved += report.savedTokens;
+    totals.lastReport = report;
+    renderSaverPanel();
+  }
+
   async function requestCompletion(messages, options = {}) {
     const model = state.models.find(item => item.id === state.selectedModel);
     const capabilities = Array.isArray(model?.capabilities) ? model.capabilities : null;
+    const compressed = compressRequest({
+      messages,
+      tools: options.tools?.length ? options.tools : null
+    });
     const payload = {
       model: state.selectedModel,
-      messages,
+      messages: compressed.messages,
       stream: !capabilities || capabilities.includes('streaming'),
       temperature: state.mode === 'agent' ? 0.25 : 0.55
     };
-    if (options.tools?.length) {
-      payload.tools = options.tools;
+    if (compressed.tools?.length) {
+      payload.tools = compressed.tools;
       payload.tool_choice = 'auto';
     }
+    options.onReport?.(compressed.report);
     let response;
     try {
-      response = await fetch(`${API_BASE}/chat/completions`, {
+      response = await fetch(`${state.apiBase}/chat/completions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${state.apiKey}`, 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' },
         body: JSON.stringify(payload),
@@ -732,9 +1019,10 @@
       if (body?.error) throw new Error(body.error.message || 'CodeCraft API returned an error.');
       const message = body?.choices?.[0]?.message;
       if (!message) throw new Error('CodeCraft returned an empty completion.');
-      return { text: typeof message.content === 'string' ? message.content : '', toolCalls: normalizeToolCalls(message.tool_calls || []), usage: body.usage || null };
+      return { text: typeof message.content === 'string' ? message.content : '', toolCalls: normalizeToolCalls(message.tool_calls || []), usage: body.usage || null, report: compressed.report };
     }
-    return readEventStream(response.body, options);
+    const streamed = await readEventStream(response.body, options);
+    return { ...streamed, report: compressed.report };
   }
 
   function updateRateLimit(headers) {
@@ -818,6 +1106,7 @@
     let segment = '';
     const result = await requestCompletion(session.apiMessages, {
       signal,
+      onReport: report => applyReportToEntry(entry, report),
       onText: text => {
         segment = text;
         entry.text = text;
@@ -843,7 +1132,8 @@
       const textBeforeRound = entry.text;
       const result = await requestCompletion(session.apiMessages, {
         signal,
-        tools: TOOL_DEFINITIONS,
+        onReport: report => applyReportToEntry(entry, report),
+        tools: currentToolDefinitions(),
         onText: text => {
           segment = text;
           entry.pending = true;
@@ -914,6 +1204,41 @@
   }
 
   async function executeTool(name, args, entry) {
+    if (SKILLS && name === 'list_skills') {
+      const registry = state.skills.registry;
+      if (!registry.total) return { content: 'No Claude markdown (CLAUDE.md, SKILL.md, .claude/commands) was found in this workspace.', activity: 'No skills found' };
+      const filter = typeof args.kind === 'string' ? args.kind.trim().toLowerCase() : '';
+      const rows = skillEntries()
+        .filter(record => record.enabled !== false)
+        .filter(record => !filter || record.kind === filter || (filter === 'memory' && record.kind === 'memory'))
+        .map(record => `${record.kind.padEnd(8)} ${record.name} — ${record.description || record.summary || 'no description'} (${record.path})`);
+      return {
+        content: `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'} available:\n${rows.join('\n')}`,
+        activity: `Listed ${rows.length} skill entr${rows.length === 1 ? 'y' : 'ies'}`
+      };
+    }
+    if (SKILLS && name === 'read_skill') {
+      const record = SKILLS.resolveSkill(state.skills.registry, args.name);
+      if (!record) return { content: `No skill named “${args.name}”. Use list_skills to see the available names.`, activity: `Unknown skill · ${args.name}` };
+      if (record.enabled === false) return { content: `The user disabled “${record.name}” for this session, so its instructions are not available.`, activity: `Skill disabled · ${record.name}` };
+      const rendered = SKILLS.renderSkillForModel(record, { maxChars: 24000 });
+      const compact = COMPRESSOR && state.saver.profile !== 'off'
+        ? COMPRESSOR.compressText(rendered, { profile: state.saver.profile === 'safe' ? 'safe' : 'balanced' }).text
+        : rendered;
+      return { content: compact, activity: `Loaded skill ${record.name}` };
+    }
+    if (SKILLS && name === 'read_skill_resource') {
+      const record = SKILLS.resolveSkill(state.skills.registry, args.name);
+      if (!record) return { content: `No skill named “${args.name}”.`, activity: `Unknown skill · ${args.name}` };
+      let path;
+      try { path = normalizeWorkspacePath(args.path); } catch (error) { return { content: error.message, activity: 'Resource path rejected' }; }
+      const content = state.files.get(path);
+      if (content === undefined) {
+        const alternatives = record.resources.map(item => item.relative).slice(0, 10);
+        return { content: `Not found in the workspace: ${path}.${alternatives.length ? ` Files bundled with this skill: ${alternatives.join(', ')}` : ''}`, activity: `Missing skill file · ${args.path}` };
+      }
+      return { content: `SKILL FILE: ${path}\n${content.slice(0, 20000)}${content.length > 20000 ? '\n… truncated' : ''}`, activity: `Read ${path}` };
+    }
     if (state.workspace.kind === 'none') return { content: 'No workspace is connected. Ask the user to connect a local folder or GitHub repository before using file tools.', activity: 'No workspace connected' };
     if (name === 'list_files') {
       const contains = typeof args.contains === 'string' ? args.contains.toLowerCase() : '';
@@ -1378,6 +1703,17 @@
     else if (kind === 'local-import') dom.workspaceFooterStatus.textContent = state.dirtyFiles.size ? `${state.dirtyFiles.size} staged change${state.dirtyFiles.size === 1 ? '' : 's'} · download to export` : `Imported read-only · ${count} text files`;
     else dom.workspaceFooterStatus.textContent = state.dirtyFiles.size ? `${state.dirtyFiles.size} approved local change${state.dirtyFiles.size === 1 ? '' : 's'} saved` : `Local folder · ${count} text files`;
     renderFileList();
+    // Re-discover skill markdown whenever the set of markdown paths changes.
+    // (A Map identity check would miss in-place edits: the app mutates one Map.)
+    const scanToken = [...state.files.keys()]
+      .filter(path => /\.(?:md|markdown|mdx)$/i.test(path) || /SKILL\.md$/i.test(path))
+      .join('|');
+    if (scanToken !== state.skills.scanToken) {
+      state.skills.scanToken = scanToken;
+      refreshSkills({ silent: true });
+      renderSkillsPanel();
+      if (state.currentSession) syncSessionSystem(state.currentSession);
+    }
   }
 
   function renderFileList() {
@@ -1416,6 +1752,7 @@
     dom.fileDialogPath.textContent = path;
     dom.filePreviewCode.textContent = content;
     dom.copyFileButton.dataset.path = path;
+    delete dom.copyFileButton.dataset.skillPath;
     if (typeof dom.fileDialog.showModal === 'function') dom.fileDialog.showModal();
     else dom.fileDialog.setAttribute('open', '');
   }
@@ -1520,7 +1857,522 @@
     showToast(`Downloaded ${changed.length} edited file${changed.length === 1 ? '' : 's'} as a ZIP.`);
   }
 
-  function renderModelsFromFallback() {
+  /* ---------------------------------------------------------------------- *
+   * Token saver UI
+   * ---------------------------------------------------------------------- */
+
+  function formatCount(value) {
+    const number = Number(value) || 0;
+    if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(number % 1_000_000 ? 1 : 0)}M`;
+    if (number >= 1000) return `${(number / 1000).toFixed(number % 1000 < 100 ? 1 : 0)}k`;
+    return String(number);
+  }
+
+  function sessionSaverPercentage() {
+    const totals = state.saver.totals;
+    if (!totals.tokensBefore) return 0;
+    return Math.round((totals.saved / totals.tokensBefore) * 1000) / 10;
+  }
+
+  function renderSaverPanel() {
+    if (!COMPRESSOR) return;
+    const totals = state.saver.totals;
+    const percent = sessionSaverPercentage();
+    const profile = COMPRESSOR.PROFILES[state.saver.profile] || COMPRESSOR.PROFILES.balanced;
+    dom.saverBadge.textContent = profile.label.toUpperCase();
+    dom.saverBadge.classList.toggle('is-muted', state.saver.profile === 'off');
+    dom.saverChipLabel.textContent = `Saver · ${profile.label}`;
+    dom.saverChipSaving.hidden = totals.runs === 0;
+    dom.saverChipSaving.textContent = `−${percent}%`;
+    dom.saverChipSaving.classList.toggle('is-off', percent <= 0);
+    dom.saverMeterFill.style.width = `${Math.min(100, percent)}%`;
+    dom.saverSent.textContent = formatCount(totals.tokensBefore - totals.saved);
+    dom.saverSaved.textContent = formatCount(totals.saved);
+    dom.saverRuns.textContent = String(totals.runs);
+    if (!totals.runs) {
+      dom.saverHeadline.textContent = 'Nothing compressed yet';
+      dom.saverSub.textContent = 'Requests are compacted in this tab before they are sent. Your files and the visible conversation are never modified.';
+    } else {
+      dom.saverHeadline.textContent = `−${percent}% input tokens this session`;
+      dom.saverSub.textContent = `${totals.tokensBefore.toLocaleString()} tokens of context became ${totals.tokensAfter.toLocaleString()} across ${totals.runs} request${totals.runs === 1 ? '' : 's'}.`;
+    }
+    if (dom.saverDialog.open) renderSaverReport(totals.lastReport, 'Last request');
+  }
+
+  function renderProfileGrid() {
+    if (!COMPRESSOR) return;
+    const profiles = ['off', 'safe', 'balanced', 'aggressive'];
+    dom.profileGrid.replaceChildren();
+    for (const id of profiles) {
+      const profile = COMPRESSOR.PROFILES[id];
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `profile-option${state.saver.profile === id ? ' is-active' : ''}`;
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', String(state.saver.profile === id));
+      const tag = profile.id === 'off' || profile.lossy === false ? 'lossless' : 'lossy';
+      button.innerHTML = `<span class="profile-tag ${tag}">${tag === 'lossless' ? 'LOSSLESS' : 'REWRITES'}</span><strong></strong><small></small>`;
+      $('strong', button).textContent = profile.label;
+      $('small', button).textContent = profile.description;
+      button.addEventListener('click', () => {
+        state.saver.profile = id;
+        saveSettings();
+        renderProfileGrid();
+        renderSaverPanel();
+        showToast(`Token saver profile: ${profile.label}.`);
+      });
+      dom.profileGrid.append(button);
+    }
+  }
+
+  function renderSaverReport(report, title = 'Session totals') {
+    if (!dom.saverDialog.open) return;
+    dom.saverReportTitle.textContent = title;
+    if (!report) {
+      const totals = state.saver.totals;
+      const percent = sessionSaverPercentage();
+      dom.saverReportMeta.textContent = totals.runs ? `${totals.runs} runs · −${percent}%` : 'no requests yet';
+      dom.saverReportMeter.style.width = `${Math.min(100, percent)}%`;
+      dom.techniqueTable.innerHTML = totals.runs
+        ? '<div class="technique-empty">Send another message to see a per-request breakdown, or run the sample benchmark.</div>'
+        : '<div class="technique-empty">Nothing compressed yet. Run the sample benchmark to see what each technique saves.</div>';
+      return;
+    }
+    dom.saverReportMeta.textContent = `${report.tokensBefore.toLocaleString()} → ${report.tokensAfter.toLocaleString()} tokens · −${report.savedPct}%`;
+    dom.saverReportMeter.style.width = `${Math.min(100, report.savedPct)}%`;
+    if (!report.techniques.length) {
+      dom.techniqueTable.innerHTML = '<div class="technique-empty">Nothing needed rewriting in this request.</div>';
+      return;
+    }
+    dom.techniqueTable.replaceChildren();
+    for (const technique of report.techniques) {
+      const row = document.createElement('div');
+      row.className = 'technique-row';
+      row.innerHTML = `<span></span><i class="technique-tag ${technique.lossy ? '' : 'is-lossless'}">${technique.lossy ? 'REWRITE' : 'LOSSLESS'}</i><b></b>`;
+      $('span', row).textContent = `${technique.label}${technique.hits ? ` ×${technique.hits}` : ''}`;
+      $('b', row).textContent = `−${technique.tokens.toLocaleString()} tok`;
+      row.title = technique.detail || (technique.lossy ? 'Rewrites wording or removes comments from the request copy.' : 'Lossless: whitespace and duplicate removal only.');
+      dom.techniqueTable.append(row);
+    }
+  }
+
+  function openSaverDialog() {
+    if (!COMPRESSOR) {
+      showToast('The token saver module did not load.', 'error');
+      return;
+    }
+    renderProfileGrid();
+    dom.saverCurrentTurnToggle.checked = state.saver.compactCurrentTurnFiles;
+    dom.saverPruneToggle.checked = state.saver.pruneOldPayloads;
+    dom.saverSchemaToggle.checked = state.saver.compactToolSchemas;
+    dom.saverTurnsSelect.value = String(state.saver.keepRecentTurns);
+    dom.saverBudgetInput.value = String(state.saver.targetTokens || 0);
+    dom.saverReportTitle.textContent = 'Session totals';
+    if (typeof dom.saverDialog.showModal === 'function') dom.saverDialog.showModal();
+    else dom.saverDialog.setAttribute('open', '');
+    renderSaverReport(state.saver.totals.lastReport, state.saver.totals.lastReport ? 'Last request' : 'Session totals');
+  }
+
+  function previewCompression() {
+    if (!COMPRESSOR) return;
+    const session = state.currentSession;
+    const messages = session?.apiMessages?.length ? session.apiMessages : [getSystemMessage()];
+    const prepared = COMPRESSOR.compressMessages(messages, {
+      profile: state.saver.profile,
+      keepRecentTurns: state.saver.keepRecentTurns,
+      compactCurrentTurnFiles: state.saver.compactCurrentTurnFiles,
+      pruneOldPayloads: state.saver.pruneOldPayloads,
+      compactToolSchemas: state.saver.compactToolSchemas,
+      targetTokens: state.saver.targetTokens
+    });
+    renderSaverReport(
+      { ...prepared.report, tokensBefore: prepared.report.tokensBefore, tokensAfter: prepared.report.tokensAfter },
+      session?.apiMessages?.length ? 'Preview · this conversation' : 'Preview · system prompt only'
+    );
+    showToast(`Preview: ${prepared.report.tokensBefore.toLocaleString()} → ${prepared.report.tokensAfter.toLocaleString()} tokens (−${prepared.report.savedPct}%).`);
+  }
+
+  function runBenchmark() {
+    if (!COMPRESSOR) return;
+    const profile = state.saver.profile === 'off' ? 'balanced' : state.saver.profile;
+    const scenario = state.mode === 'agent' ? 'agent' : 'session';
+    const turns = scenario === 'agent' ? 12 : 20;
+    const report = COMPRESSOR.benchmark({ profile, scenario, turns });
+    renderSaverReport(report, `Benchmark · ${scenario === 'agent' ? 'Agent session with file reads' : 'Chat session'} · ${turns} turns · ${report.profileLabel}`);
+    showToast(`Benchmark: −${report.savedPct}% on a synthetic ${turns}-turn ${scenario === 'agent' ? 'agent' : 'chat'} session.`);
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Skills UI
+   * ---------------------------------------------------------------------- */
+
+  function renderSkillsPanel() {
+    if (!SKILLS) return;
+    const registry = state.skills.registry;
+    const active = skillEntries().filter(record => record.enabled !== false);
+    dom.skillsBadge.textContent = registry.errorCount ? 'CHECK' : registry.total ? 'LOADED' : 'NONE';
+    dom.skillsBadge.classList.toggle('is-muted', registry.total === 0);
+    dom.skillMiniList.replaceChildren();
+    if (!registry.total) {
+      dom.skillsHeadline.textContent = 'No skill markdown found';
+      dom.skillsSub.textContent = 'Forge reads CLAUDE.md, agents.md, SKILL.md, .claude/commands and .claude/agents from the connected workspace and loads them as model data. Add one, or paste a skill directly.';
+      return;
+    }
+    dom.skillsHeadline.textContent = `${registry.total} Claude markdown ${registry.total === 1 ? 'entry' : 'entries'} loaded`;
+    const counts = [
+      registry.skills.length ? `${registry.skills.length} skill${registry.skills.length === 1 ? '' : 's'}` : '',
+      registry.memory.length ? `${registry.memory.length} instruction file${registry.memory.length === 1 ? '' : 's'}` : '',
+      registry.commands.length ? `${registry.commands.length} command${registry.commands.length === 1 ? '' : 's'}` : '',
+      registry.agents.length ? `${registry.agents.length} sub-agent${registry.agents.length === 1 ? '' : 's'}` : ''
+    ].filter(Boolean);
+    dom.skillsSub.textContent = `${counts.join(' · ')} in the model context (≈${state.skills.lastTokens.toLocaleString()} tokens). ${registry.errorCount ? `${registry.errorCount} need front-matter fixes.` : ''}`;
+    for (const record of active.slice(0, 4)) {
+      const row = document.createElement('div');
+      row.className = 'skill-mini';
+      row.innerHTML = '<strong></strong><small></small>';
+      $('strong', row).textContent = record.name;
+      $('small', row).textContent = record.kind === 'memory' ? 'MEMORY' : record.kind.toUpperCase();
+      row.title = record.path;
+      dom.skillMiniList.append(row);
+    }
+    if (active.length > 4) {
+      const more = document.createElement('div');
+      more.className = 'skill-mini';
+      more.innerHTML = `<strong>+${active.length - 4} more</strong><small>OPEN</small>`;
+      dom.skillMiniList.append(more);
+    }
+  }
+
+  function skillRow(record) {
+    const row = document.createElement('div');
+    row.className = 'skill-row';
+    const head = document.createElement('div');
+    head.className = 'skill-row-head';
+    head.innerHTML = `<span class="skill-badge kind-${record.kind}">${record.kind.toUpperCase()}</span><strong></strong><label class="skill-toggle"><input type="checkbox" /><span>in context</span></label>`;
+    $('strong', head).textContent = record.name + (record.manual ? ' · added here' : '');
+    const toggle = $('input', head);
+    toggle.checked = record.enabled !== false;
+    toggle.addEventListener('change', () => {
+      state.skills.override.set(record.path, toggle.checked);
+      record.enabled = toggle.checked;
+      state.skills.contextKey = '';
+      renderSkillsDialog();
+      renderSkillsPanel();
+      if (state.currentSession) syncSessionSystem(state.currentSession);
+    });
+    row.append(head);
+    const description = document.createElement('p');
+    description.textContent = record.description || record.summary || 'No description — the model has less to go on when deciding to load this.';
+    row.append(description);
+    const path = document.createElement('span');
+    path.className = 'skill-path';
+    path.textContent = `${record.path} · ${record.lines} lines · ${record.chars.toLocaleString()} chars${record.resources.length ? ` · ${record.resources.length} bundled file${record.resources.length === 1 ? '' : 's'}` : ''}`;
+    row.append(path);
+    if (record.errors.length || record.warnings.length) {
+      const list = document.createElement('ul');
+      list.className = 'skill-problems';
+      for (const message of record.errors) {
+        const item = document.createElement('li');
+        item.className = 'is-error';
+        item.textContent = message;
+        list.append(item);
+      }
+      for (const message of record.warnings) {
+        const item = document.createElement('li');
+        item.textContent = message;
+        list.append(item);
+      }
+      row.append(list);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'skill-row-actions';
+    const preview = document.createElement('button');
+    preview.type = 'button';
+    preview.className = 'modal-secondary';
+    preview.textContent = 'Preview body';
+    preview.addEventListener('click', () => {
+      dom.fileDialogPath.textContent = `${record.path}${record.allowedTools.length ? ` · allowed-tools: ${record.allowedTools.join(', ')}` : ''}`;
+      dom.filePreviewCode.textContent = record.body || '(empty body)';
+      dom.copyFileButton.dataset.path = '';
+      dom.copyFileButton.dataset.skillPath = record.path;
+      if (typeof dom.fileDialog.showModal === 'function') dom.fileDialog.showModal();
+    });
+    actions.append(preview);
+    if (record.manual) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'modal-secondary';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => {
+        state.skills.manual = state.skills.manual.filter(item => item.path !== record.path);
+        refreshSkills();
+        renderSkillsDialog();
+        renderSkillsPanel();
+      });
+      actions.append(remove);
+    }
+    row.append(actions);
+    return row;
+  }
+
+  function renderSkillsDialog() {
+    if (!SKILLS || !dom.skillsDialog.open) return;
+    const registry = state.skills.registry;
+    dom.skillsCount.textContent = registry.total
+      ? `${registry.total} entr${registry.total === 1 ? 'y' : 'ies'} · ≈${state.skills.lastTokens.toLocaleString()} tokens injected`
+      : 'nothing detected yet';
+    dom.skillsList.replaceChildren();
+    if (!registry.total) {
+      const empty = document.createElement('div');
+      empty.className = 'skill-empty';
+      empty.innerHTML = 'No Claude markdown found in this workspace.<br />Add <code>CLAUDE.md</code> or <code>.claude/skills/&lt;name&gt;/SKILL.md</code>, click <strong>Rescan workspace</strong>, or paste one below.';
+      dom.skillsList.append(empty);
+      return;
+    }
+    const order = { skill: 0, memory: 1, command: 2, agent: 3 };
+    const rows = skillEntries().sort((a, b) => (order[a.kind] - order[b.kind]) || a.name.localeCompare(b.name));
+    for (const record of rows) dom.skillsList.append(skillRow(record));
+  }
+
+  function openSkillsDialog() {
+    if (!SKILLS) {
+      showToast('The skills module did not load.', 'error');
+      return;
+    }
+    dom.skillEditor.hidden = true;
+    setFormError(dom.skillEditorError, '');
+    renderSkillsDialog();
+    if (typeof dom.skillsDialog.showModal === 'function') dom.skillsDialog.showModal();
+    else dom.skillsDialog.setAttribute('open', '');
+  }
+
+  async function handleSkillFiles(event) {
+    const files = [...(event.target.files || [])];
+    dom.skillFileInput.value = '';
+    if (!files.length || !SKILLS) return;
+    let added = 0;
+    for (const file of files) {
+      const content = await file.text();
+      const relative = file.webkitRelativePath || file.name;
+      const path = relative.includes('/') ? relative.split('/').slice(1).join('/') : relative;
+      const target = /skill\.md$/i.test(path) ? path : `.claude/skills/${SKILLS.toId(path.replace(/\.[^.]*$/, '')) || 'skill'}/${path.split('/').pop()}`;
+      state.skills.manual = state.skills.manual.filter(item => item.path !== target);
+      state.skills.manual.push({ path: target, content, name: path.split('/').pop() });
+      added += 1;
+    }
+    refreshSkills();
+    renderSkillsDialog();
+    renderSkillsPanel();
+    if (state.currentSession) syncSessionSystem(state.currentSession);
+    showToast(`${added} skill file${added === 1 ? '' : 's'} added to the model context.`);
+  }
+
+  function savePastedSkill() {
+    if (!SKILLS) return;
+    const name = dom.skillNameInput.value.trim();
+    const body = dom.skillBodyInput.value.trim();
+    if (!body) {
+      setFormError(dom.skillEditorError, 'Paste some markdown (or a full SKILL.md with front matter) first.');
+      return;
+    }
+    setFormError(dom.skillEditorError, '');
+    const id = SKILLS.toId(name || 'pasted-skill');
+    const path = `.claude/skills/${id}/SKILL.md`;
+    const content = /^\s*---/.test(body)
+      ? body
+      : ['---', `name: ${id}`, `description: ${(name ? `${name}. ` : '')}Pasted into Forge and loaded as a Claude-format skill. Describe when to use it by editing this line.`, '---', '', body].join('\n');
+    state.skills.manual = state.skills.manual.filter(item => item.path !== path);
+    state.skills.manual.push({ path, content, name: id });
+    dom.skillNameInput.value = '';
+    dom.skillBodyInput.value = '';
+    dom.skillEditor.hidden = true;
+    refreshSkills();
+    renderSkillsDialog();
+    renderSkillsPanel();
+    if (state.currentSession) syncSessionSystem(state.currentSession);
+    showToast(`“${id}” is now available to the model.`);
+  }
+
+  function downloadSkillTemplate() {
+    if (!SKILLS) return;
+    const blob = new Blob([SKILLS.template('my-skill')], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'SKILL.md';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Template downloaded. Save it as .claude/skills/<name>/SKILL.md in your project.');
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Connection doctor
+   * ---------------------------------------------------------------------- */
+
+  function doctorRow(id, state_, title, detail) {
+    let row = $(`[data-doctor="${id}"]`, dom.doctorResults);
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'doctor-row';
+      row.dataset.doctor = id;
+      row.innerHTML = '<i></i><div><strong></strong><small></small></div>';
+      dom.doctorResults.append(row);
+    }
+    row.classList.remove('is-pass', 'is-warn', 'is-fail', 'is-run');
+    row.classList.add(`is-${state_}`);
+    $('strong', row).textContent = title;
+    $('small', row).innerHTML = detail;
+    return row;
+  }
+
+  function describeFetchFailure(error, url) {
+    if (error?.name === 'AbortError') return { level: 'warn', text: 'The check was cancelled.' };
+    if (error instanceof TypeError || error?.name === 'TypeError') {
+      return {
+        level: 'fail',
+        text: `The browser could not complete the request to <code>${escapeHtml(url)}</code>. That is the signature of a blocked cross-origin request: a browser check (Cloudflare), an ad/privacy blocker, an offline network, or a provider that does not allow this page's origin.`
+      };
+    }
+    return { level: 'fail', text: escapeHtml(error?.message || String(error)) };
+  }
+
+  async function probe(url, headers = {}) {
+    const started = performance.now();
+    try {
+      const response = await fetch(url, { headers, cache: 'no-store' });
+      return { response, ms: Math.round(performance.now() - started), error: null };
+    } catch (error) {
+      return { response: null, ms: Math.round(performance.now() - started), error };
+    }
+  }
+
+  async function runDoctor() {
+    if (state.diagnostics.running) return;
+    state.diagnostics.running = true;
+    state.diagnostics.results = [];
+    dom.doctorResults.replaceChildren();
+    dom.doctorRunButton.disabled = true;
+    dom.doctorStatus.textContent = 'running checks…';
+    const base = state.apiBase;
+    const push = (id, level, title, detail) => {
+      state.diagnostics.results.push({ id, level, title, detail: detail.replace(/<[^>]+>/g, '') });
+      doctorRow(id, level === 'run' ? 'run' : level, title, detail);
+    };
+
+    try {
+      push('env', location.protocol === 'file:' ? 'fail' : location.isSecureContext ? 'pass' : 'warn', 'Page environment',
+        location.protocol === 'file:'
+          ? 'This page was opened straight from disk (<code>file://</code>), which sends an <code>Origin: null</code> and is rejected by most APIs. Serve it over http(s) — for example <code>python3 -m http.server 8000</code> — or use the published Pages URL.'
+          : `Served over ${location.protocol}//${location.host}${location.isSecureContext ? ' (secure context)' : ' — not a secure context, so some APIs are blocked'}.`);
+
+      push('online', navigator.onLine ? 'pass' : 'fail', 'Device connectivity',
+        navigator.onLine ? 'The browser reports an active connection.' : 'The browser reports that this device is offline.');
+
+      push('dns', 'run', 'Reaching the API host', `GET <code>${escapeHtml(base)}/models</code> without a key…`);
+      const anonymous = await probe(`${base}/models`, { Accept: 'application/json' });
+      if (anonymous.error) {
+        const failure = describeFetchFailure(anonymous.error, `${base}/models`);
+        doctorRow('dns', failure.level, 'Reaching the API host', failure.text);
+        state.diagnostics.results[state.diagnostics.results.length - 1].detail = failure.text.replace(/<[^>]+>/g, '');
+      } else {
+        const status = anonymous.response.status;
+        const body = await anonymous.response.text().catch(() => '');
+        const looksBlocked = /just a moment|cf-chl|cloudflare|enable javascript/i.test(body) || status === 403 || status === 503;
+        doctorRow('dns', looksBlocked ? 'warn' : 'pass', 'Reaching the API host',
+          looksBlocked
+            ? `The host answered <strong>${status}</strong> with a browser-check page rather than JSON (${anonymous.ms} ms). Sign in at CodeCraft in this browser first so the check is cleared, then run the checks again.`
+            : `Host reachable in ${anonymous.ms} ms (HTTP ${status}). An unauthenticated request is expected to be rejected — that is what this check verifies.`);
+        state.diagnostics.results[state.diagnostics.results.length - 1].detail = looksBlocked ? `Browser-check response (HTTP ${status})` : `Reachable in ${anonymous.ms} ms (HTTP ${status})`;
+      }
+
+      push('key', state.apiKey ? 'run' : 'warn', 'Your API key', state.apiKey ? 'Sending an authenticated model list request…' : 'No key is loaded in this tab. Connect one above and re-run.');
+      if (state.apiKey) {
+        const authorized = await probe(`${base}/models`, { Authorization: `Bearer ${state.apiKey}`, Accept: 'application/json' });
+        if (authorized.error) {
+          const failure = describeFetchFailure(authorized.error, `${base}/models`);
+          doctorRow('key', failure.level, 'Your API key', failure.text);
+        } else if (authorized.response.ok) {
+          let count = 0;
+          try {
+            const payload = await authorized.response.json();
+            count = (Array.isArray(payload) ? payload : payload?.data || []).length;
+          } catch (_) { count = 0; }
+          doctorRow('key', 'pass', 'Your API key', `Accepted in ${authorized.ms} ms — ${count} model${count === 1 ? '' : 's'} visible to this account.`);
+        } else {
+          const detail = await readErrorResponse(authorized.response);
+          const hint = authorized.response.status === 401 || authorized.response.status === 403
+            ? ' The key was rejected: check that it is active, spelled correctly, and has the inference and models:read scopes.'
+            : authorized.response.status === 429
+              ? ' Rate limited: wait for the window to reset or use another key.'
+              : '';
+          doctorRow('key', 'fail', 'Your API key', `${escapeHtml(detail)}.${hint}`);
+        }
+      }
+
+      push('cors', 'pass', 'Browser request rules',
+        `Forge talks to <code>${escapeHtml(new URL(base).host)}</code> directly from this tab; nothing is proxied. If the two checks above failed with a network error while the CodeCraft site itself loads in another tab, the block is at the edge (browser check, extension, VPN or company proxy) rather than in Forge.`);
+
+      const failed = [...dom.doctorResults.children].filter(row => row.classList.contains('is-fail')).length;
+      dom.doctorStatus.textContent = failed ? `${failed} check${failed === 1 ? '' : 's'} failing · ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : `all checks passed · ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    } finally {
+      state.diagnostics.running = false;
+      state.diagnostics.finishedAt = Date.now();
+      dom.doctorRunButton.disabled = false;
+    }
+  }
+
+  function openDoctorDialog() {
+    dom.doctorSteps.innerHTML = [
+      '<li><strong>Sign in once in this browser.</strong> Open the CodeCraft sign-in page, finish it (including the “Checking your browser…” step), then come back and press <em>Save &amp; test</em>. The check leaves a clearance cookie on the API host that a plain fetch cannot obtain.</li>',
+      '<li><strong>Turn off privacy shields for this host.</strong> Content blockers, Brave Shields, some VPN clients and school/company proxies drop the request before CodeCraft sees it.</li>',
+      '<li><strong>If the sign-in page itself never stops loading:</strong> the page is inside a Cloudflare browser check. Try a private window with extensions disabled, another network (mobile hotspot), and make sure the device clock is correct — a skewed clock fails the challenge.</li>',
+      '<li><strong>Serve the app over http(s).</strong> Pages served from <code>file://</code> send <code>Origin: null</code>, which most APIs reject outright.</li>',
+      '<li><strong>Last resort: point Forge at your own gateway.</strong> Advanced → API base URL accepts any OpenAI-compatible endpoint you control that forwards to CodeCraft.</li>'
+    ].join('');
+    if (typeof dom.doctorDialog.showModal === 'function') dom.doctorDialog.showModal();
+    else dom.doctorDialog.setAttribute('open', '');
+    if (!state.diagnostics.results.length) runDoctor();
+  }
+
+  function copyDoctorReport() {
+    const lines = [
+      `Forge connection report · ${new Date().toISOString()}`,
+      `page: ${location.href}`,
+      `base: ${state.apiBase}`,
+      `secure context: ${location.isSecureContext}`,
+      `online: ${navigator.onLine}`,
+      `key loaded: ${state.apiKey ? 'yes' : 'no'}`,
+      `models loaded: ${state.models.length}`,
+      ...state.diagnostics.results.map(item => `${item.level.toUpperCase()} ${item.title}: ${item.detail}`)
+    ];
+    navigator.clipboard.writeText(lines.join('\n'))
+      .then(() => showToast('Connection report copied. Paste it anywhere you like — it contains no key.'))
+      .catch(() => showToast('Clipboard access is not available in this browser.', 'error'));
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Environment banner
+   * ---------------------------------------------------------------------- */
+
+  function renderEnvironmentBanner() {
+    if (!dom.envBanner) return;
+    let dismissed = false;
+    try { dismissed = window.sessionStorage.getItem('forge.envBannerDismissed') === '1'; } catch (_) { dismissed = false; }
+    if (dismissed) return;
+    if (location.protocol === 'file:') {
+      dom.envBannerText.innerHTML = 'This copy of Forge was opened from a file on disk (<code>file://</code>). API requests from that origin are usually rejected. Serve the folder instead — <code>python3 -m http.server 8000</code> — or use the published GitHub Pages URL.';
+      dom.envBanner.hidden = false;
+      return;
+    }
+    if (/\.github\.io$/i.test(location.hostname) && /\/404/.test(document.body.textContent || '')) {
+      dom.envBannerText.innerHTML = 'GitHub Pages is not serving this project yet, so the URL you followed does not exist.';
+      dom.envBanner.hidden = false;
+    }
+  }
+
+    function renderModelsFromFallback() {
     dom.modelSelect.innerHTML = `<option value="${FALLBACK_MODEL}">${FALLBACK_MODEL}</option>`;
     dom.modelSelect.value = FALLBACK_MODEL;
     state.selectedModel = FALLBACK_MODEL;
@@ -1538,6 +2390,79 @@
       dom.revealApiKeyButton.textContent = show ? 'Hide' : 'Show';
       dom.apiKeyInput.focus();
     });
+    if (COMPRESSOR) {
+      dom.saverOpenButton.addEventListener('click', openSaverDialog);
+      dom.saverChip.addEventListener('click', openSaverDialog);
+      dom.saverCurrentTurnToggle.addEventListener('change', () => {
+        state.saver.compactCurrentTurnFiles = dom.saverCurrentTurnToggle.checked;
+        saveSettings();
+      });
+      dom.saverPruneToggle.addEventListener('change', () => {
+        state.saver.pruneOldPayloads = dom.saverPruneToggle.checked;
+        saveSettings();
+      });
+      dom.saverSchemaToggle.addEventListener('change', () => {
+        state.saver.compactToolSchemas = dom.saverSchemaToggle.checked;
+        saveSettings();
+      });
+      dom.saverTurnsSelect.addEventListener('change', () => {
+        state.saver.keepRecentTurns = Number(dom.saverTurnsSelect.value) || 2;
+        saveSettings();
+      });
+      dom.saverBudgetInput.addEventListener('change', () => {
+        state.saver.targetTokens = Math.max(0, Number(dom.saverBudgetInput.value) || 0);
+        dom.saverBudgetInput.value = String(state.saver.targetTokens);
+        saveSettings();
+      });
+      dom.saverPreviewButton.addEventListener('click', previewCompression);
+      dom.saverBenchmarkButton.addEventListener('click', runBenchmark);
+      dom.saverResetButton.addEventListener('click', () => {
+        state.saver.totals = { runs: 0, tokensBefore: 0, tokensAfter: 0, saved: 0, lastReport: null, lastLabel: '' };
+        state.saver.seen = new Map();
+        renderSaverPanel();
+        renderSaverReport(null, 'Session totals');
+        showToast('Token saver counters reset.');
+      });
+    }
+
+    if (SKILLS) {
+      dom.skillsOpenButton.addEventListener('click', openSkillsDialog);
+      dom.skillsRescanButton.addEventListener('click', () => {
+        refreshSkills({ toast: true });
+        renderSkillsDialog();
+        renderSkillsPanel();
+        if (state.currentSession) syncSessionSystem(state.currentSession);
+      });
+      dom.skillsAddFileButton.addEventListener('click', () => dom.skillFileInput.click());
+      dom.skillFileInput.addEventListener('change', handleSkillFiles);
+      dom.skillsPasteButton.addEventListener('click', () => {
+        dom.skillEditor.hidden = !dom.skillEditor.hidden;
+        setFormError(dom.skillEditorError, '');
+        if (!dom.skillEditor.hidden) {
+          if (!dom.skillBodyInput.value) dom.skillBodyInput.value = SKILLS.template('my-skill');
+          dom.skillNameInput.focus();
+        }
+      });
+      dom.skillsTemplateButton.addEventListener('click', downloadSkillTemplate);
+      dom.skillEditorCancel.addEventListener('click', () => { dom.skillEditor.hidden = true; });
+      dom.skillEditorSave.addEventListener('click', savePastedSkill);
+    }
+
+    dom.runDoctorButton.addEventListener('click', () => {
+      try { dom.apiDialog.close(); } catch (_) { /* not open */ }
+      openDoctorDialog();
+    });
+    dom.doctorRunButton.addEventListener('click', runDoctor);
+    dom.doctorCopyButton.addEventListener('click', copyDoctorReport);
+    dom.openCodecraftLoginButton.addEventListener('click', () => {
+      window.open(LOGIN_URL, '_blank', 'noreferrer');
+      showToast('Finish the sign-in (including the browser check), then come back and press “Save & test”.');
+    });
+    dom.envBannerClose.addEventListener('click', () => {
+      dom.envBanner.hidden = true;
+      try { window.sessionStorage.setItem('forge.envBannerDismissed', '1'); } catch (_) { /* storage disabled */ }
+    });
+
     dom.modelSelect.addEventListener('change', () => {
       state.selectedModel = dom.modelSelect.value;
       renderModelDetails();
@@ -1585,7 +2510,8 @@
     });
     dom.copyFileButton.addEventListener('click', async () => {
       const path = dom.copyFileButton.dataset.path;
-      const content = state.files.get(path) || '';
+      const skillPath = dom.copyFileButton.dataset.skillPath;
+      const content = (path ? state.files.get(path) : '') || (skillPath ? (SKILLS?.resolveSkill(state.skills.registry, skillPath)?.body || '') : '') || '';
       try {
         await navigator.clipboard.writeText(content);
         dom.copyFileButton.innerHTML = 'Copied <span>✓</span>';
@@ -1615,13 +2541,44 @@
     });
   }
 
+  /** Read-only introspection for the console and for tests. Never exposes keys. */
+  function exposeDebugApi() {
+    window.ForgeDebug = {
+      snapshot: () => ({
+        apiBase: state.apiBase,
+        apiKeyLoaded: Boolean(state.apiKey),
+        models: state.models.length,
+        mode: state.mode,
+        workspace: state.workspace.kind,
+        files: state.files.size,
+        skills: state.skills.registry.total,
+        skillErrors: state.skills.registry.errorCount,
+        skillTokens: state.skills.lastTokens,
+        saverProfile: state.saver.profile,
+        saverRuns: state.saver.totals.runs,
+        saverSavedPct: sessionSaverPercentage()
+      }),
+      systemMessage: () => getSystemMessage().content,
+      compress: (messages, options) => COMPRESSOR?.compressMessages(messages, options),
+      benchmark: (options) => COMPRESSOR?.benchmark(options),
+      refreshSkills: () => { refreshSkills(); return state.skills.registry.total; },
+      doctor: () => { openDoctorDialog(); return true; }
+    };
+  }
+
   function init() {
+    loadSettings();
     bindEvents();
     renderModelsFromFallback();
     renderHistory();
+    refreshSkills({ silent: true });
     renderWorkspaceUI();
+    renderSaverPanel();
+    renderSkillsPanel();
+    renderEnvironmentBanner();
     setMode('chat');
     resizePrompt();
+    exposeDebugApi();
   }
 
   init();

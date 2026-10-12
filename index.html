@@ -8,9 +8,16 @@
     <title>Forge — CodeCraft Playground</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
+    <script src="compressor.js" defer></script>
+    <script src="skills.js" defer></script>
     <script src="app.js" defer></script>
   </head>
   <body>
+    <div class="env-banner" id="envBanner" hidden role="status">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.9 18 17H2l8-14.1Z"/><path d="M10 8.1v4.1M10 14.4h.01"/></svg>
+      <span id="envBannerText"></span>
+      <button type="button" class="env-banner-close" id="envBannerClose" aria-label="Dismiss">×</button>
+    </div>
     <div class="app-shell">
       <aside class="sidebar" id="sidebar" aria-label="Main navigation">
         <a class="brand" href="#" aria-label="Forge home">
@@ -129,6 +136,7 @@
             <div class="prompt-card-bottom">
               <div class="prompt-tools">
                 <button class="composer-tool" id="attachButton" type="button" title="Connect a local folder"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.8 5.4a1.6 1.6 0 0 1 1.6-1.6h4l1.8 1.8h5.4a1.6 1.6 0 0 1 1.6 1.6v7a1.6 1.6 0 0 1-1.6 1.6H4.4a1.6 1.6 0 0 1-1.6-1.6v-8.8Z" /></svg><span>Workspace</span></button>
+                <button class="composer-tool saver-chip" id="saverChip" type="button" title="Token saver settings"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 12.6 9.4 7l3 3L17 5.4"/><path d="M4 16.4h12"/></svg><span id="saverChipLabel">Saver · Balanced</span><b id="saverChipSaving" hidden>−0%</b></button>
                 <span class="composer-context" id="workspaceHint"><i></i>No project connected</span>
               </div>
               <div class="prompt-submit-side"><span class="prompt-mode-label" id="modeHint">CHAT</span><button class="send-button" id="sendButton" type="submit" aria-label="Send message"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.8V4.2M5.4 8.7 10 4.1l4.6 4.6" /></svg></button></div>
@@ -175,12 +183,34 @@
           <p class="usage-disclaimer">No Forge usage cap. CodeCraft account limits and pricing still apply.</p>
         </section>
 
+        <section class="inspector-section saver-panel">
+          <div class="section-heading"><span class="eyebrow">TOKEN SAVER</span><span class="model-status" id="saverBadge">BALANCED</span></div>
+          <h3 id="saverHeadline">Nothing compressed yet</h3>
+          <p id="saverSub">Requests are compacted in this tab before they are sent. Your files and the conversation you can see are never modified.</p>
+          <div class="saver-meter" role="img" aria-label="Share of input tokens saved"><span id="saverMeterFill"></span></div>
+          <div class="saver-facts">
+            <div><span>SENT</span><strong id="saverSent">0</strong></div>
+            <div><span>SAVED</span><strong id="saverSaved">0</strong></div>
+            <div><span>RUNS</span><strong id="saverRuns">0</strong></div>
+          </div>
+          <button class="text-action" id="saverOpenButton" type="button">Configure &amp; preview</button>
+        </section>
+
+        <section class="inspector-section skills-panel">
+          <div class="section-heading"><span class="eyebrow">CLAUDE SKILLS</span><span class="model-status" id="skillsBadge">NONE</span></div>
+          <h3 id="skillsHeadline">No skill markdown found</h3>
+          <p id="skillsSub">Forge looks for CLAUDE.md, agents.md, SKILL.md and .claude/commands in the connected workspace, then loads them as model data.</p>
+          <div class="skill-mini-list" id="skillMiniList"></div>
+          <button class="text-action" id="skillsOpenButton" type="button">Manage skills &amp; memory</button>
+        </section>
+
         <section class="privacy-note"><div class="privacy-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 16 4.4v4.4c0 3.8-2.6 6.4-6 8.3-3.4-1.9-6-4.5-6-8.3V4.4l6-1.9Z"/><path d="m7.6 9.3 1.6 1.6 3.4-3.5"/></svg></div><div><strong>Private by design</strong><p>API keys stay in tab memory and are sent directly to the provider. Workspace contents are not saved by Forge.</p></div></section>
         <div class="inspector-bottom"><span class="bottom-led"></span><span id="workspaceFooterStatus">Ready when you are</span><button type="button" id="disconnectWorkspaceButton" hidden>Disconnect</button></div>
       </aside>
     </div>
 
     <input id="localFileInput" class="sr-only" type="file" webkitdirectory directory multiple aria-label="Choose a local project folder" />
+    <input id="skillFileInput" class="sr-only" type="file" accept=".md,.markdown,.mdx,.txt" multiple aria-label="Choose skill markdown files" />
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
 
     <dialog class="modal" id="apiDialog" aria-labelledby="apiDialogTitle">
@@ -188,11 +218,20 @@
         <div class="modal-top"><div class="modal-icon api-modal-icon"><svg viewBox="0 0 22 22" aria-hidden="true"><path d="m11 2.7 7.5 4.2v8.2L11 19.3l-7.5-4.2V6.9L11 2.7Z"/><path d="m8 8.8 3-1.7 3 1.7v4.4l-3 1.7-3-1.7V8.8Z"/></svg></div><button class="modal-close" type="button" data-close-dialog="apiDialog" aria-label="Close">×</button></div>
         <p class="modal-eyebrow">ONE KEY. YOUR CHOICE OF MODEL.</p><h2 id="apiDialogTitle">Connect CodeCraft API</h2>
         <p class="modal-description">Add your CodeCraft API key to load the models available to your account. Forge sends requests directly from this browser tab.</p>
+        <div class="signin-row">
+          <button class="signin-button" id="openCodecraftLoginButton" type="button"><span class="signin-dot"></span>Open CodeCraft sign-in</button>
+          <span class="signin-hint">Signing in first clears the browser check that blocks key requests.</span>
+        </div>
         <label class="field-label" for="apiKeyInput">API key <a href="https://codecraftapi.com/dashboard" target="_blank" rel="noreferrer">Get a key ↗</a></label>
         <div class="secret-input-wrap"><input id="apiKeyInput" type="password" placeholder="cc_••••••••••••••••" autocomplete="off" spellcheck="false" /><button id="revealApiKeyButton" type="button" aria-label="Show API key">Show</button></div>
+        <details class="advanced-block">
+          <summary>Advanced: API base URL</summary>
+          <p>Only change this if you run your own OpenAI-compatible gateway in front of CodeCraft (for example to get around a network that blocks browser requests). The key is still sent only to the host you type here.</p>
+          <input class="text-field" id="apiBaseInput" type="url" placeholder="https://codecraftapi.com/v1" spellcheck="false" autocomplete="off" />
+        </details>
         <div class="security-callout"><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 2.1 14.5 4v4.1c0 3.5-2.4 5.9-5.5 7.6-3.1-1.7-5.5-4.1-5.5-7.6V4L9 2.1Z"/><path d="m6.8 8.7 1.5 1.5 3-3.2"/></svg><span>Never stored or sent through a Forge server. The provider's own limits and pricing apply.</span></div>
         <div class="form-error" id="apiFormError" role="alert"></div>
-        <div class="modal-actions"><button class="modal-secondary" type="button" data-close-dialog="apiDialog">Cancel</button><button class="modal-primary" id="saveApiButton" type="submit">Save &amp; test <span>↗</span></button></div>
+        <div class="modal-actions"><button class="modal-secondary" id="runDoctorButton" type="button">Connection doctor</button><button class="modal-secondary" type="button" data-close-dialog="apiDialog">Cancel</button><button class="modal-primary" id="saveApiButton" type="submit">Save &amp; test <span>↗</span></button></div>
       </form>
     </dialog>
 
@@ -219,6 +258,88 @@
         <pre class="change-preview"><code id="writePreview"></code></pre>
         <div class="security-callout"><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 2.1 14.5 4v4.1c0 3.5-2.4 5.9-5.5 7.6-3.1-1.7-5.5-4.1-5.5-7.6V4L9 2.1Z"/><path d="m6.8 8.7 1.5 1.5 3-3.2"/></svg><span>Review the full change in your editor after applying. Forge does not run code or shell commands.</span></div>
         <div class="modal-actions"><button class="modal-secondary" id="denyWriteButton" type="button">Decline</button><button class="modal-primary" id="approveWriteButton" type="button">Approve change <span>✓</span></button></div>
+      </section>
+    </dialog>
+
+    <dialog class="modal wide-modal" id="saverDialog" aria-labelledby="saverDialogTitle">
+      <section class="modal-card">
+        <div class="modal-top"><div class="modal-icon saver-modal-icon"><svg viewBox="0 0 22 22" aria-hidden="true"><path d="M4 13.6 10.2 7l3.3 3.3L19 4.6"/><path d="M4 18h14"/><path d="M15.4 4.6H19v3.6"/></svg></div><button class="modal-close" type="button" data-close-dialog="saverDialog" aria-label="Close">×</button></div>
+        <p class="modal-eyebrow">TOKEN SAVER · INPUT CONTEXT ONLY</p><h2 id="saverDialogTitle">Compress what gets sent</h2>
+        <p class="modal-description">Forge compresses the request copy of your conversation before it leaves the tab. Your prompt, your visible transcript and every file in your workspace stay exactly as they are.</p>
+
+        <div class="profile-grid" id="profileGrid" role="radiogroup" aria-label="Compression profile"></div>
+
+        <div class="switch-list">
+          <label class="switch-row"><input type="checkbox" id="saverCurrentTurnToggle" /><span><strong>Compress file reads in this turn</strong><small>Comments and blank lines are trimmed from workspace files the agent just read. Biggest single saving in Agent mode.</small></span></label>
+          <label class="switch-row"><input type="checkbox" id="saverPruneToggle" /><span><strong>Prune file bodies from older turns</strong><small>Stale reads become one-line pointers. The agent calls read_file again when it needs the body, and nothing on disk changes.</small></span></label>
+          <label class="switch-row"><input type="checkbox" id="saverSchemaToggle" /><span><strong>Slim tool schemas</strong><small>Trims long tool and parameter descriptions that are re-sent on every agent round.</small></span></label>
+        </div>
+
+        <div class="field-grid saver-grid">
+          <div><label class="field-label" for="saverTurnsSelect">Keep verbatim turns</label><select class="text-field" id="saverTurnsSelect"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></div>
+          <div><label class="field-label" for="saverBudgetInput">Token budget (0 = off)</label><input class="text-field" id="saverBudgetInput" type="number" min="0" step="1000" value="0" /></div>
+        </div>
+
+        <div class="saver-report" id="saverReport">
+          <div class="saver-report-head"><strong id="saverReportTitle">Session totals</strong><span id="saverReportMeta"></span></div>
+          <div class="saver-meter large"><span id="saverReportMeter"></span></div>
+          <div class="technique-table" id="techniqueTable"></div>
+        </div>
+
+        <div class="saver-actions">
+          <button class="modal-secondary" id="saverPreviewButton" type="button">Preview this conversation</button>
+          <button class="modal-secondary" id="saverBenchmarkButton" type="button">Run sample benchmark</button>
+          <button class="modal-secondary" id="saverResetButton" type="button">Reset counters</button>
+        </div>
+        <p class="modal-footnote" id="saverFootnote">Savings are measured per request with Forge's own token estimator, so treat them as a close estimate rather than a provider-side invoice. Measured on the bundled samples: a 6-turn chat saves ~40%, a 12-turn agent session with commented files ~58–61%, and a 30-turn chat ~63–66%. Comment-heavy real projects save more; the lossless profile stays in the 15–30% range because it never rewrites wording.</p>
+      </section>
+    </dialog>
+
+    <dialog class="modal wide-modal" id="skillsDialog" aria-labelledby="skillsDialogTitle">
+      <section class="modal-card">
+        <div class="modal-top"><div class="modal-icon skills-modal-icon"><svg viewBox="0 0 22 22" aria-hidden="true"><path d="M11 2.6 19 7v8l-8 4.4L3 15V7l8-4.4Z"/><path d="m7.8 9.4 3.2-1.8 3.2 1.8v3.4L11 14.6l-3.2-1.8V9.4Z"/></svg></div><button class="modal-close" type="button" data-close-dialog="skillsDialog" aria-label="Close">×</button></div>
+        <p class="modal-eyebrow">CLAUDE MARKDOWN · LOADED AS MODEL DATA</p><h2 id="skillsDialogTitle">Skills &amp; project instructions</h2>
+        <p class="modal-description">Anything Claude can read as markdown — <code>CLAUDE.md</code>, <code>agents.md</code>, <code>SKILL.md</code>, <code>.claude/commands</code>, <code>.claude/agents</code> — is discovered from the workspace, validated, and injected into the model context. Skills are progressive-disclosure: the model receives the index, then loads a full skill with <code>read_skill</code> when the task matches.</p>
+        <div class="skills-toolbar">
+          <button class="modal-secondary" id="skillsRescanButton" type="button">Rescan workspace</button>
+          <button class="modal-secondary" id="skillsAddFileButton" type="button">Add skill file</button>
+          <button class="modal-secondary" id="skillsPasteButton" type="button">Paste a skill</button>
+          <button class="modal-secondary" id="skillsTemplateButton" type="button">Download template</button>
+          <span class="skills-count" id="skillsCount"></span>
+        </div>
+        <div class="skills-list" id="skillsList"></div>
+        <div class="skill-editor" id="skillEditor" hidden>
+          <label class="field-label" for="skillNameInput">Skill name</label>
+          <input class="text-field" id="skillNameInput" type="text" placeholder="release-notes-writer" spellcheck="false" />
+          <label class="field-label" for="skillBodyInput">Markdown (front matter optional — Forge adds it)</label>
+          <textarea class="text-field code-field" id="skillBodyInput" rows="9" spellcheck="false"></textarea>
+          <div class="skill-editor-actions">
+            <button class="modal-secondary" id="skillEditorCancel" type="button">Cancel</button>
+            <button class="modal-primary" id="skillEditorSave" type="button">Add to model context <span>✓</span></button>
+          </div>
+          <div class="form-error" id="skillEditorError" role="alert"></div>
+        </div>
+        <p class="modal-footnote">Skills loaded here live in this tab only. To keep one permanently, save the file into the workspace (for example <code>.claude/skills/name/SKILL.md</code>) and push it.</p>
+      </section>
+    </dialog>
+
+    <dialog class="modal wide-modal" id="doctorDialog" aria-labelledby="doctorDialogTitle">
+      <section class="modal-card">
+        <div class="modal-top"><div class="modal-icon doctor-modal-icon"><svg viewBox="0 0 22 22" aria-hidden="true"><path d="M11 3v5.3M8.3 5.7h5.4"/><path d="M5.6 8.6h10.8A2.6 2.6 0 0 1 19 11.2v3.4A2.6 2.6 0 0 1 16.4 17H5.6A2.6 2.6 0 0 1 3 14.6v-3.4a2.6 2.6 0 0 1 2.6-2.6Z"/><path d="M7.6 17v2m6.8-2v2"/></svg></div><button class="modal-close" type="button" data-close-dialog="doctorDialog" aria-label="Close">×</button></div>
+        <p class="modal-eyebrow">WHEN THE CONNECT PAGE WILL NOT LOAD</p><h2 id="doctorDialogTitle">Connection doctor</h2>
+        <p class="modal-description">CodeCraft sits behind a Cloudflare browser check. If the sign-in page spins, or “Save &amp; test” fails with a network error, one of these checks will say why.</p>
+        <div class="doctor-actions">
+          <button class="modal-primary" id="doctorRunButton" type="button">Run checks</button>
+          <a class="modal-secondary link-button" href="https://codecraftapi.com/login" target="_blank" rel="noreferrer">Open sign-in page ↗</a>
+          <a class="modal-secondary link-button" href="https://codecraftapi.com/dashboard" target="_blank" rel="noreferrer">Open dashboard ↗</a>
+          <span class="doctor-status" id="doctorStatus"></span>
+        </div>
+        <div class="doctor-results" id="doctorResults"></div>
+        <ol class="doctor-steps" id="doctorSteps"></ol>
+        <div class="doctor-actions doctor-actions-foot">
+          <button class="modal-secondary" id="doctorCopyButton" type="button">Copy report</button>
+          <button class="modal-secondary" type="button" data-close-dialog="doctorDialog">Close</button>
+        </div>
       </section>
     </dialog>
 

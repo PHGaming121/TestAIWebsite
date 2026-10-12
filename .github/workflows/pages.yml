@@ -1,39 +1,117 @@
 name: Deploy Forge to GitHub Pages
 
+# Publishing is why the site URL works at all: if Pages is disabled for the
+# repository, https://<owner>.github.io/<repository>/ answers with GitHub's own
+# 404 page and no JavaScript from this project ever runs. This workflow
+# therefore (1) enables Pages if it is missing, and (2) has a fallback job that
+# publishes the same files to a `gh-pages` branch when the Pages API refuses to
+# create the site.
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
 concurrency:
   group: github-pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  build:
+    name: Build static site
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
+
       - name: Prepare static site
         run: |
           mkdir -p _site
-          cp index.html styles.css app.js favicon.svg _site/
+          cp index.html styles.css app.js compressor.js skills.js favicon.svg _site/
           touch _site/.nojekyll
+          for file in index.html styles.css app.js compressor.js skills.js favicon.svg; do
+            if [ ! -s "_site/$file" ]; then
+              echo "::error::Expected site file $file is missing or empty."
+              exit 1
+            fi
+          done
+          ls -la _site
+
+      - name: Sanity check the JavaScript parses
+        run: |
+          for file in app.js compressor.js skills.js; do
+            node --check "_site/$file"
+          done
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      # `enablement: true` creates the Pages site when it does not exist yet,
+      # which is the usual reason this step failed before.
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Report the published URL
+        run: |
+          echo "### Forge is live" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.deployment.outputs.page_url }}" >> "$GITHUB_STEP_SUMMARY"
+
+  publish-branch:
+    name: Fallback publish to gh-pages
+    needs: [build, deploy]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Publish the same files to a gh-pages branch
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp index.html styles.css app.js compressor.js skills.js favicon.svg _site/
+          touch _site/.nojekyll
+          cd _site
+          git init -q
+          git checkout -q -b gh-pages
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -qm "Publish Forge site"
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git push -f origin gh-pages
+
+      - name: Explain what to do next
+        run: |
+          echo "::warning::Pages could not be enabled automatically. The site was published to the gh-pages branch instead. Open Settings -> Pages, set Source to 'Deploy from a branch', pick the gh-pages branch and the / (root) folder, then re-run this workflow."
+          echo "### Pages needs one manual step" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "1. Settings -> Pages -> Source: **Deploy from a branch**." >> "$GITHUB_STEP_SUMMARY"
+          echo "2. Branch: **gh-pages**, folder: **/ (root)**, then Save." >> "$GITHUB_STEP_SUMMARY"
+          echo "3. Re-run this workflow (Actions -> Deploy Forge to GitHub Pages -> Run workflow)." >> "$GITHUB_STEP_SUMMARY"
