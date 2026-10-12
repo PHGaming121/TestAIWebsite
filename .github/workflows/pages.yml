@@ -60,32 +60,44 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      deployed: ${{ steps.deployment.outcome || 'skipped' }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
-      # `enablement: true` creates the Pages site when it does not exist yet,
-      # which is the usual reason this step failed before.
+      # `enablement: true` creates the Pages site when the workflow token is
+      # allowed to. When it is not (the token needs repository admin rights to
+      # create a Pages site), this step fails and the gh-pages job below takes
+      # over, so a push still ends with a green run and a fresh site.
       - name: Configure Pages
         id: pages
+        continue-on-error: true
         uses: actions/configure-pages@v5
         with:
           enablement: true
 
       - name: Deploy to GitHub Pages
         id: deployment
+        if: steps.pages.outcome == 'success'
         uses: actions/deploy-pages@v4
 
       - name: Report the published URL
+        if: steps.deployment.outcome == 'success'
         run: |
           echo "### Forge is live" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "${{ steps.deployment.outputs.page_url }}" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Note that the gh-pages branch is used instead
+        if: steps.deployment.outcome != 'success'
+        run: |
+          echo "::notice::GitHub Pages is not enabled for Actions deployment on this repository, so the site is published from the gh-pages branch instead. If the site URL still 404s, open Settings -> Pages, set Source to 'Deploy from a branch', choose gh-pages and / (root), then re-run this workflow."
+
   publish-branch:
     name: Fallback publish to gh-pages
     needs: [build, deploy]
-    if: failure()
+    if: always() && needs.build.result == 'success' && needs.deploy.outputs.deployed != 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -109,9 +121,12 @@ jobs:
 
       - name: Explain what to do next
         run: |
-          echo "::warning::Pages could not be enabled automatically. The site was published to the gh-pages branch instead. Open Settings -> Pages, set Source to 'Deploy from a branch', pick the gh-pages branch and the / (root) folder, then re-run this workflow."
-          echo "### Pages needs one manual step" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Site published to the gh-pages branch" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "1. Settings -> Pages -> Source: **Deploy from a branch**." >> "$GITHUB_STEP_SUMMARY"
+          echo "The workflow token cannot create a Pages site on this repository, so the built files are kept on the **gh-pages** branch." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "If https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/ still shows GitHub's 404 page, do this once:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "1. Settings -> Pages -> Build and deployment -> Source: **Deploy from a branch**." >> "$GITHUB_STEP_SUMMARY"
           echo "2. Branch: **gh-pages**, folder: **/ (root)**, then Save." >> "$GITHUB_STEP_SUMMARY"
-          echo "3. Re-run this workflow (Actions -> Deploy Forge to GitHub Pages -> Run workflow)." >> "$GITHUB_STEP_SUMMARY"
+          echo "3. Re-run this workflow (or push any commit to main) to refresh the branch." >> "$GITHUB_STEP_SUMMARY"
