@@ -102,7 +102,9 @@
     rateLimitText: 'Provider limits and pricing apply',
     toastTimer: null,
     apiBase: API_BASE,
-    // Token saver. `seen` dedupes repeated file reads inside one session.
+    // Token saver settings and measured totals. The compressor keeps its own
+    // per-request index for duplicate reads: provider requests are stateless,
+    // so a cross-request index would produce dangling pointers.
     saver: {
       profile: 'balanced',
       keepRecentTurns: 2,
@@ -110,7 +112,6 @@
       pruneOldPayloads: true,
       compactToolSchemas: true,
       targetTokens: 0,
-      seen: new Map(),
       totals: { runs: 0, tokensBefore: 0, tokensAfter: 0, saved: 0, lastReport: null, lastLabel: '' }
     },
     // Claude skill data discovered from the workspace or added by hand.
@@ -537,7 +538,6 @@
 
   function newSession() {
     if (state.sending) stopGeneration();
-    state.saver.seen = new Map();
     state.currentSession = null;
     dom.messageList.replaceChildren();
     dom.messageList.hidden = true;
@@ -2418,7 +2418,6 @@
       dom.saverBenchmarkButton.addEventListener('click', runBenchmark);
       dom.saverResetButton.addEventListener('click', () => {
         state.saver.totals = { runs: 0, tokensBefore: 0, tokensAfter: 0, saved: 0, lastReport: null, lastLabel: '' };
-        state.saver.seen = new Map();
         renderSaverPanel();
         renderSaverReport(null, 'Session totals');
         showToast('Token saver counters reset.');
