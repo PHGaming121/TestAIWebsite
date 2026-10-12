@@ -1,0 +1,18 @@
+{
+  "name": "forge-codecraft-playground",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Browser-only CodeCraft coding playground with a token compressor, Claude skill loading and a connection doctor. The site itself needs no build step and no dependencies.",
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\"",
+    "test:unit": "node --test \"tests/unit.test.mjs\"",
+    "test:browser": "node --test \"tests/smoke.browser.test.mjs\"",
+    "serve": "python3 -m http.server 8000"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
